@@ -167,7 +167,7 @@ Run `node scripts/stats.mjs [--project <absolute cwd>] [--json]` for read-only t
 statistics with no model call. Storage is bounded to 200 samples per kind and writes are
 best effort. Stored large tool outputs are trimmed; Codex rollout files remain unchanged.
 Context get now shows at most ten short job summaries plus total count: use `codex_status`
-for details. See `docs/release-1.2/job-e.md` for settings, outcomes and host test commands.
+for details.
 <!-- END JOB E 1.2 SMARTER RUNS -->
 
 <!-- BEGIN CODEX-TEAM 1.2 SMARTER REVIEW -->
@@ -183,7 +183,7 @@ Large diffs (>60,000 hunk characters or >30 files) use external baseline/verifie
 
 Changed `.codex/`, `AGENTS.md` or `AGENTS.override.md` content in the execution folder or its ancestors through the Git root, including ignored files, prevents native and advisory review. Existing ignored configuration is captured at job start; nested dependency instructions do not block. The guard repeats immediately before each launch. Resolve the instruction/configuration change and verify again; an incomplete packet is not acceptance evidence. Compound PowerShell/bash/cmd reads count toward evidence floors; printed commands and directory listings do not. All reviewer/native/scout prose stays untrusted.
 
-Coverage and required commands are documented in `docs/release-1.2/job-f.md`: `tests/review.test.mjs`, existing decision-packet/scout tests and strict-schema/tool-output/security-hardening regressions. Legacy rows/reports/packets may omit all new fields. The optional Stop gate remains deferred.
+Coverage: `tests/review.test.mjs`, existing decision-packet/scout tests and strict-schema/tool-output/security-hardening regressions. Legacy rows/reports/packets may omit all new fields. The optional Stop gate remains deferred.
 <!-- END CODEX-TEAM 1.2 SMARTER REVIEW -->
 
 
@@ -196,7 +196,7 @@ Use `codex_status` with `includeProfileChecks:false` when that is the planned ve
 
 The owner's opt-in UserPromptSubmit hook handles `/codex-team:status [prefix]`, `/codex-team:result <prefix>`, `/codex-team:cancel <prefix>` and `/codex-team:stats` without a model turn. It scopes to the Git root, labels result text as untrusted, and reports candidate jobs for missing or ambiguous IDs. Cancellation is a request, not proof of termination. The hook costs one Node startup per prompt; non-matches exit before plugin imports. README contains the opt-in settings snippet; never register it automatically. Command-file fallbacks invoke `scripts/commands.mjs --cli` and display its output verbatim.
 
-Deadline-finalized scouts must cite existing file line ranges already read in their thread; the finalize turn remains tool-free. Scouts with no read evidence fail `no-evidence`. Doctor may advise pinning a known-good CLI through `CODEX_TEAM_CODEX` for 0.157.x setup-refresh failures; it changes nothing automatically. The check launcher now preserves `CODEX_HOME`. See `docs/release-1.2/job-h.md` for all hardening items and tests.
+Deadline-finalized scouts must cite existing file line ranges already read in their thread; the finalize turn remains tool-free. Scouts with no read evidence fail `no-evidence`. Doctor may advise pinning a known-good CLI through `CODEX_TEAM_CODEX` for 0.157.x setup-refresh failures; it changes nothing automatically. The check launcher now preserves `CODEX_HOME`.
 Evidence floors are bounded heuristics, not security boundaries. Explicit file reads count; listing/count commands, aliases/functions, null redirection and mixed search output do not. Automatic resume and deadline finalize refuse changed project instructions/configuration, including ignored `.codex/` content. A finalize `config_changed` outcome requires lead inspection. Enforced budgets serialize reviewers; reviewer authentication failures leave an incomplete packet without changing the implementation's runtime state.
 <!-- END CODEX-TEAM 1.2 DEFAULTS AND COMMANDS -->
 
@@ -208,9 +208,9 @@ Read the Stop footer as the owner's last task: since their latest genuine prompt
 
 Codex attribution follows full job IDs in this session's correlated codex-team MCP results, including subagent transcripts, across any project folder. User/assistant prose mentions and general context/status listings do not attribute a job. Individual starts, queries, revisions and resumes count when their result IDs occur, as do explicitly delegated batch children. Completed implementation/reviewer/salvage execs count in the task in which they finish; running execs show cumulative live samples, replaced by final usage. The worker stores bounded attempt-start-to-result `lineStats`: a new revision starts a new authorship baseline, while automatic resumes and salvage within one job retain it. Verification keeps its original baseline. Known canonical file identities count once per task; different project roots stay distinct. Legacy/missing counts and identities, binary and oversized lines are marked unknown. Lead code counts come from successful source Edit/Write/NotebookEdit/MultiEdit results; shell edits are invisible, and markdown, `~/.claude` and scratchpad edits are excluded.
 
-The 14-line, 110-character footer keeps the context meter, reset advisor, rate windows, delegation alarm and unavailable-usage notices. Existing `CODEX_TEAM_TOKENS` and `CODEX_TEAM_TOKENS_MIN_CALLS` settings remain; bounds/incomplete history fail open. See `docs/release-1.2/job-121.md` for all limits, test coverage and changed legacy expectations.
+The 14-line, 110-character footer keeps the context meter, reset advisor, rate windows, delegation alarm and unavailable-usage notices. Existing `CODEX_TEAM_TOKENS` and `CODEX_TEAM_TOKENS_MIN_CALLS` settings remain; bounds/incomplete history fail open.
 
-All scout-seeded jobs default `autoVerify:false` with reason `Scout-seeded job: auto-verify requires an explicit lead choice`. Explicit `true` is eligible only if no normalized command/args match a drafted check; reordered checks or changed metadata still match. Finalize permits reasoning/todo/message items, never tools or unknown items. Command text stays JSON-encoded and untrusted; command-file job IDs go to MCP, never into a `!` shell line. Command-printed setup errors cannot poison persistent project health. `CODEX_HOME` reaches the check launcher, not implementer/reviewer/check shell policies. Evidence floors remain heuristics, not security boundaries; the known read/configuration gaps are documented in the release notes.
+All scout-seeded jobs default `autoVerify:false` with reason `Scout-seeded job: auto-verify requires an explicit lead choice`. Explicit `true` is eligible only if no normalized command/args match a drafted check; reordered checks or changed metadata still match. Finalize permits reasoning/todo/message items, never tools or unknown items. Command text stays JSON-encoded and untrusted; command-file job IDs go to MCP, never into a `!` shell line. Command-printed setup errors cannot poison persistent project health. `CODEX_HOME` reaches the check launcher, not implementer/reviewer/check shell policies. Evidence floors remain heuristics, not security boundaries.
 
 Command-file fallbacks resolve job prefixes with read-only project-scoped `codex_status` (`detail:"full"`, no jobId), then use the exact unique full ID. Show candidates for missing, unknown or ambiguous prefixes; never cancel an ambiguous match. Capped/truncated listings require a full ID. Full UUIDs remain usable directly; arguments never enter shell lines.
 
