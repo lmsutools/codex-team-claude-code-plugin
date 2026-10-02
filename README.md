@@ -177,7 +177,7 @@ After each task, a Stop hook prints the split between Claude (the lead) and Code
 Requires **Node.js 24+**, [Claude Code](https://code.claude.com/docs) and the [Codex CLI](https://github.com/openai/codex), both already logged in.
 
 ```shell
-claude plugin marketplace add lmsutools/codex-team-claude-code-plugin
+claude plugin marketplace add https://github.com/lmsutools/codex-team-claude-code-plugin.git
 claude plugin install codex-team@lmsutools --scope user
 ```
 
@@ -188,7 +188,7 @@ claude plugin marketplace update lmsutools
 claude plugin update codex-team@lmsutools
 ```
 
-Inside a Claude Code session, `/plugin marketplace add lmsutools/codex-team-claude-code-plugin` and `/plugin install codex-team@lmsutools` do the same. Restart or reconnect sessions after installing or updating.
+Inside a Claude Code session, `/plugin marketplace add https://github.com/lmsutools/codex-team-claude-code-plugin.git` and `/plugin install codex-team@lmsutools` do the same. The short form `lmsutools/codex-team-claude-code-plugin` also works if your Git can reach GitHub over SSH. Restart or reconnect sessions after installing or updating.
 
 Then open Claude Code in a Git project and run `/codex-team:lead <what you want built>`. Claude can also pick up the skill on its own.
 
