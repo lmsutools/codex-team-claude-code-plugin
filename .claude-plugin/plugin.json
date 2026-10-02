@@ -1,0 +1,10 @@
+{
+  "name": "codex-team",
+  "version": "1.2.1",
+  "description": "Claude leads; Codex codes. Optional project profiles, ownership, verification gates, evidence, branch delivery, parallel batches, budgets, redaction, hygiene, and handoffs.",
+  "author": { "name": "lmsutools", "url": "https://github.com/lmsutools" },
+  "homepage": "https://github.com/lmsutools/codex-team-claude-code-plugin",
+  "repository": "https://github.com/lmsutools/codex-team-claude-code-plugin",
+  "license": "MIT",
+  "keywords": ["codex", "tech-lead", "implementation", "review"]
+}

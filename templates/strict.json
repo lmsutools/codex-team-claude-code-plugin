@@ -1,0 +1,32 @@
+{
+  "profileVersion": 1,
+  "name": "strict",
+  "components": {
+    "textHygiene": {
+      "level": "enforce",
+      "lineEndings": "preserve",
+      "encoding": "utf-8",
+      "bom": "preserve",
+      "finalNewline": "preserve"
+    },
+    "secrets": {
+      "level": "enforce",
+      "forbiddenPaths": [
+        "**/*.env",
+        "**/.env",
+        "**/.env.*"
+      ],
+      "patterns": [
+        "sk-[A-Za-z0-9]{20,}",
+        "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+      ],
+      "scan": [
+        "diff",
+        "workerLog",
+        "report",
+        "commitMessage"
+      ],
+      "redactInState": true
+    }
+  }
+}

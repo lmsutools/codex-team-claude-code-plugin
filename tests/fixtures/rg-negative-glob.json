@@ -1,0 +1,5 @@
+[
+  "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Location; rg --files -g AGENTS.md -g '\"'!node_modules'\"' -g '\"'!**/.git/**'\"'; git status --short; Get-Item src/sum.mjs, tests/sum.test.mjs -ErrorAction SilentlyContinue\"",
+  "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Location; rg --files -g AGENTS.md -g '\"'!node_modules'\"' -g '\"'!**/.git/**'\"'; git status --short; Get-Item src/sum.mjs, tests/sum.test.mjs -ErrorAction SilentlyContinue\"",
+  "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'Get-ChildItem -Force | Select-Object Mode,Name; $taskPath = (Get-Location).Path; while ($taskPath) { $instructionPath = Join-Path $taskPath '\"'AGENTS.md'; if (Test-Path -LiteralPath \"'$instructionPath) { Write-Output $instructionPath; Get-Content -LiteralPath $instructionPath }; $taskPath = Split-Path -Parent $taskPath }; rg --files --hidden -g '\"'\"'!**/.git/**'\"' -g '\"'!**/.env*'\"' -g '\"'!node_modules'\"'\""
+]

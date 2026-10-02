@@ -1,0 +1,23 @@
+{
+  "profileVersion": 1,
+  "name": "node-small",
+  "extends": "standard",
+  "components": {
+    "gates": {
+      "level": "enforce",
+      "checks": {
+        "tests": {
+          "when": "always",
+          "command": [
+            "node",
+            "--test"
+          ]
+        }
+      }
+    },
+    "report": {
+      "level": "advise",
+      "template": "builtin:short"
+    }
+  }
+}

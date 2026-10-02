@@ -1,0 +1,13 @@
+{
+  "profileVersion": 1,
+  "name": "standard",
+  "components": {
+    "textHygiene": {
+      "level": "advise",
+      "lineEndings": "preserve",
+      "encoding": "utf-8",
+      "bom": "preserve",
+      "finalNewline": "preserve"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "lmsutools",
+  "description": "Claude Code plugins by lmsutools",
+  "owner": { "name": "lmsutools" },
+  "plugins": [
+    {
+      "name": "codex-team",
+      "source": "./",
+      "description": "Claude leads; Codex implements and tests."
+    }
+  ]
+}
