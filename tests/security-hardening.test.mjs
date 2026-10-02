@@ -410,8 +410,8 @@ test("1.1.5 runtime status reads new rows, while verify and resume use existing 
  const cwd=lifecycle.project(),jobId=randomUUID(),state={jobId,cwd,executionCwd:cwd,status:"implementation_finished",startedAt:S.now(),finishedAt:S.now(),containmentVersion:1,readOnly:false,workerProfile:"inherit",assignment:lifecycle.assignment({verification:[]}),baseline:snapshot(cwd),timeoutSeconds:60};
  fs.mkdirSync(S.jobDir(jobId));S.save(state);assert.equal(S.read(jobId).readOnly,false);const stored=encodeBoundary(state);assert.equal(stored.readOnly,true);assert.equal(decodeBoundary(stored).readOnly,false);
  const dir=path.join(lifecycle.root,"runtime-115");fs.mkdirSync(dir);
- const names=git(process.cwd(),["ls-tree","-r","--name-only","6938a70","scripts"]).stdout.trim().split(/\r?\n/).filter(n=>n.endsWith(".mjs"));
- for(const name of names){const target=path.join(dir,path.basename(name));fs.writeFileSync(target,git(process.cwd(),["show","6938a70:"+name]).stdout);}
+ const runtime115=new URL("./fixtures/runtime-1.1.5/",import.meta.url);
+ for(const name of fs.readdirSync(runtime115).filter(n=>n.endsWith(".mjs")))fs.copyFileSync(new URL(name,runtime115),path.join(dir,name));
  const script='import * as R from '+JSON.stringify(pathToFileURL(path.join(dir,"runtime.mjs")).href)+';const input='+JSON.stringify({cwd,jobId})+';const result={status:await R.statusJob(input)};for(const action of ["verify","resume"]){try{result[action]=action==="verify"?R.verifyJob(input):R.startJob({cwd:input.cwd,resumeJobId:input.jobId,requestId:"mixed-version",prompt:"revision"});}catch(e){result[action]=e.message;}}console.log(JSON.stringify(result));';
  const child=spawnSync(process.execPath,["--input-type=module","-e",script],{encoding:"utf8",env:process.env,windowsHide:true,timeout:20000});assert.equal(child.status,0,child.stderr);const result=JSON.parse(child.stdout.trim());assert.equal(result.status.readOnly,true);assert.match(result.verify,/Read-only investigations/);assert.match(result.resume,/workerProfile/);
  assert.ok(!fs.readFileSync(path.join(dir,"runtime.mjs"),"utf8").includes("autoVerify"),"1.1.5 has no auto-verify path");
