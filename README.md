@@ -30,15 +30,15 @@ Claude's context stays on design, review and judgment, and Codex does the typing
 ## How a job flows
 
 ```mermaid
-flowchart LR
-    S["Scout<br/>(optional, read-only)"] -. draft .-> A
-    A["Claude writes a<br/>structured assignment"] --> B["Codex implements<br/>in its sandbox"]
-    B --> C["Independent checks<br/>(sandboxed)"]
-    C --> D["Reviewers build a<br/>decision packet"]
-    D --> E{"Claude reviews<br/>every criterion"}
+flowchart TB
+    S["Scout (optional, read-only)"] -. draft .-> A
+    A["Claude writes a structured assignment"] --> B["Codex implements in its sandbox"]
+    B --> C["Independent checks run in the sandbox"]
+    C --> D["Reviewers build a decision packet"]
+    D --> E{"Claude reviews every criterion"}
     E -- request changes --> B
-    E -- accept --> F["Integrate or commit<br/>on the owned branch"]
-    F --> G["Delivery report<br/>and explicit push"]
+    E -- accept --> F["Integrate or commit on the owned branch"]
+    F --> G["Delivery report and explicit push"]
 ```
 
 While Codex works, Claude runs a background waiter that wakes it only on a phase change, a decision, a failure, a stall or a heartbeat. Nothing polls in a loop.
