@@ -71,6 +71,8 @@ export function classifyFailure(text, {source = "stderr"} = {}) {
   return null;
 }
 export function versionHint(version, evidence) {
+  if (/runtime_file_in_use/.test(JSON.stringify(evidence ?? null)))
+    return "Sandbox setup could not update a runtime file held by another process (os error 32), often a running Codex desktop app. Close it or wait, or pin a CLI whose setup passes here through CODEX_TEAM_CODEX, then probe again. Nothing was changed automatically.";
   return /\b0\.157\.\d+\b/.test(version || "") && /setup refresh had errors/i.test(JSON.stringify(evidence))
     ? "codex-cli 0.157.x setup refresh failed: pin a known-good CLI version through CODEX_TEAM_CODEX. Nothing was changed automatically." : null;
 }
@@ -86,14 +88,17 @@ export function logFindings(text, cwd, source = null) {
     if (line.includes("errors=[") || line.includes("completed with errors:"))
       continue;
     let kind;
-    if (/runtime read\/execute validation failed/i.test(line))
+    // A sharing violation (os error 32): another process holds a runtime file while setup updates its ACL.
+    if (/runtime read\/execute validation failed/i.test(line) && /os error 32|being used by another process/i.test(line))
+      kind = "runtime_file_in_use";
+    else if (/runtime read\/execute validation failed/i.test(line))
       kind = "runtime_read_execute";
     else if (/write ACE (?:grant )?failed/i.test(line))
       kind = "project_write_acl";
     else if (/deny ACE failed/i.test(line) && /[\\/]\.git\b/i.test(line))
       kind = "git_protection_acl";
     if (!kind) continue;
-    if (kind !== "runtime_read_execute" && project) {
+    if (!kind.startsWith("runtime_") && project) {
       const at = normalized(line).indexOf(project);
       if (
         at < 0 ||
@@ -104,11 +109,13 @@ export function logFindings(text, cwd, source = null) {
         continue;
     }
     const target = line.match(
-      /runtime read\/execute access on (.*?): CreateFileW failed/i,
+      /runtime read\/execute access on (.*?): (?:CreateFileW failed|open ACL target)/i,
     )?.[1];
     const detail =
       kind === "runtime_read_execute"
         ? "Runtime read/execute validation failed."
+        : kind === "runtime_file_in_use"
+          ? "Another process held a runtime file while Codex's setup updated its permissions (sharing violation, os error 32)."
         : kind === "project_write_acl"
           ? "Sandbox could not apply project write permissions."
           : "Sandbox could not protect the repository's .git directory.";
@@ -435,10 +442,16 @@ export function recordFailure(
 }
 export function recovery(cwd, jobId = null, diagnostics = null) {
   const owner = diagnostics?.ownership;
+  const held = [...(diagnostics?.probe?.findings || []), ...(diagnostics?.findings || [])].find(f => f.kind === "runtime_file_in_use");
   return {
     automaticRetry: false,
     assignmentPreserved: true,
     steps: [
+      ...(held
+        ? [
+            `Codex's sandbox setup could not update permissions on ${held.path || "a runtime file"} because another process holds it (os error 32). A running Codex desktop app or another Codex process usually holds files under OpenAI\\Codex\\runtimes. Close it or wait until it releases the file, or select a CLI whose setup passes here through CODEX_TEAM_CODEX; then probe again.`,
+          ]
+        : []),
       ...(owner?.mismatch
         ? [
             `${owner.detail} With the owner's authorization, run in an administrator terminal: ${owner.repair.command}. Then probe.`,
@@ -588,8 +601,11 @@ export function probeRuntime(
     });
     const passed = checked.status === 0 && checked.stdout?.includes(nonce);
     const runnerTimeout = !passed && SPAWN_TIMEOUT.test(String(checked.stderr || "") + String(checked.stdout || ""));
-    attempts.push({ durationMs: Date.now() - started, outcome: passed ? "passed" : checked.error?.code === "ETIMEDOUT" ? "timed_out" : runnerTimeout ? "runner_start_timeout" : "failed" });
-    if (passed || (checked.error?.code !== "ETIMEDOUT" && !runnerTimeout)) break;
+    const heldFile = !passed && !runnerTimeout && checked.error?.code !== "ETIMEDOUT" && logsSince(marks, executionCwd).some(f => f.kind === "runtime_file_in_use");
+    attempts.push({ durationMs: Date.now() - started, outcome: passed ? "passed" : checked.error?.code === "ETIMEDOUT" ? "timed_out" : runnerTimeout ? "runner_start_timeout" : heldFile ? "runtime_file_in_use" : "failed" });
+    if (passed || (checked.error?.code !== "ETIMEDOUT" && !runnerTimeout && !heldFile)) break;
+    // A held file is often released within seconds; pause briefly before the single retry.
+    if (heldFile) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(5000, Math.max(0, budgetEnd - Date.now() - 1000)));
   }
   const at = S.now();
   const timing = { firstRun, boundMs: bound, attempts };

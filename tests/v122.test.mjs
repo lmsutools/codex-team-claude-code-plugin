@@ -509,3 +509,30 @@ test("P8: Codex's network-off sentinel env is recognised by value; a real proxy 
     assert.doesNotMatch(JSON.stringify(result), /secret|127\.0\.0\.1:9/, "names only, never values");
   }
 });
+
+test("P1: a runtime file held by another process (os error 32) is named, retried once and explained", { skip: process.platform !== "win32" ? "Windows sandbox preflight only" : false }, async () => {
+  const line = String.raw`[t] runtime read/execute validation failed: validate runtime read/execute access on C:\Users\U\AppData\Local\OpenAI\Codex\runtimes\cua_node\x\VCRUNTIME140_1.dll: open ACL target for root-only update: The process cannot access the file because it is being used by another process. (os error 32)`;
+  const findings = D.logFindings(line, "D:\\project");
+  assert.deepEqual(findings.map(f => f.kind), ["runtime_file_in_use"]);
+  assert.match(findings[0].path, /VCRUNTIME140_1\.dll$/);
+  assert.match(D.recovery("D:\\project", null, { probe: { findings } }).steps[0], /another process holds it \(os error 32\).*desktop app/);
+  assert.match(D.versionHint("codex-cli 0.162.1", { check: { failure: { diagnostics: { probe: { findings } } } } }), /held by another process/);
+  const control = path.join(F.root, "probe-in-use.json");
+  const mode = m => { fs.writeFileSync(control, JSON.stringify({ mode: m })); fs.rmSync(control + ".calls", { force: true }); };
+  await withEnv({ CODEX_TEAM_FAKE_PROBE: control }, async () => {
+    const binary = R.resolveCodex();
+    mode("in-use-once");
+    const cwd = F.project(), runtime = D.inspectRuntime(binary, cwd);
+    const retried = D.probeRuntime(binary, runtime, cwd, { force: true, timeoutMs: 30000 });
+    assert.equal(retried.status, "passed", JSON.stringify(retried));
+    assert.deepEqual(retried.attempts.map(a => a.outcome), ["runtime_file_in_use", "passed"]);
+    mode("in-use-always");
+    const held = F.project();
+    const blocked = D.probeRuntime(binary, D.inspectRuntime(binary, held), held, { force: true, timeoutMs: 30000 });
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.failure.code, "sandbox_setup_failed");
+    assert.deepEqual(blocked.attempts.map(a => a.outcome), ["runtime_file_in_use", "runtime_file_in_use"]);
+    assert.match(blocked.failure.recovery.steps[0], /os error 32/);
+    mode("pass");
+  });
+});

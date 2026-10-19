@@ -76,6 +76,14 @@ if (args[0] === "sandbox") {
     setInterval(() => {}, 1000);
     await new Promise(() => {});
   }
+  if ((control.mode === "in-use-once" && probeCalls <= 1) || control.mode === "in-use-always") {
+    // What Codex's setup helper logs when another process holds a runtime file (sharing violation).
+    const dir = path.join(process.env.CODEX_HOME, ".sandbox");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "sandbox.log"), "[" + new Date().toISOString() + "] runtime read/execute validation failed: validate runtime read/execute access on C:\\Fixture\\OpenAI\\Codex\\runtimes\\cua_node\\VCRUNTIME140_1.dll: open ACL target for root-only update: The process cannot access the file because it is being used by another process. (os error 32)\n");
+    console.error("windows sandbox failed: helper_unknown_error: setup refresh had errors");
+    process.exit(1);
+  }
   if ((control.mode === "spawn-once" && probeCalls <= 1) || control.mode === "spawn-always") {
     console.error("Error: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");
     process.exit(1);
