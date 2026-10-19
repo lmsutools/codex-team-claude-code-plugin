@@ -379,6 +379,8 @@ function table() {
     "CREATE TABLE IF NOT EXISTS runtime_health (key TEXT PRIMARY KEY,data TEXT NOT NULL)",
   );
 }
+/** Default total preflight budget (codex_doctor probe=true). */
+export const PROBE_BUDGET_MS = 200000;
 /** Bound for one preflight attempt: long for a folder this runtime never set up. */
 export function probeBound({ firstRun = true, env = process.env } = {}) {
   const configured = Number(env.CODEX_TEAM_PROBE_TIMEOUT_MS);
@@ -517,7 +519,9 @@ export function probeRuntime(
   {
     readOnly = false,
     executionCwd = cwd,
-    timeoutMs = 20000,
+    // The total budget. codex_doctor uses this default: one first-run attempt plus a
+    // short retry; the worker passes the time left before its job deadline.
+    timeoutMs = PROBE_BUDGET_MS,
     force = false,
     jobId = null,
     thorough = false,

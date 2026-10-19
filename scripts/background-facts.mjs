@@ -54,7 +54,10 @@ if(!isMainThread && workerData?.operation) {
   try {
     const {operation,state}=workerData;
     // Test-only timing injection, like CODEX_TEAM_TEST_BACKOFF_MS: emulate a slow, loaded disk.
-    const delay=Number(process.env.CODEX_TEAM_TEST_OBSERVATION_DELAY_MS);
+    let delay=Number(process.env.CODEX_TEAM_TEST_OBSERVATION_DELAY_MS);
+    // ..._DELAY_ONCE names a marker file: only the observation that creates it is delayed.
+    const once=process.env.CODEX_TEAM_TEST_OBSERVATION_DELAY_ONCE;
+    if(once && delay>0) { const fs=await import("node:fs"); try { fs.writeFileSync(once,"1",{flag:"wx"}); } catch { delay=0; } }
     if(Number.isFinite(delay) && delay>0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,Math.min(delay,60000));
     const {snapshot}=await import("./git.mjs");
     let value;

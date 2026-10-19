@@ -111,14 +111,20 @@ test("P2: a slow observation retries and still verifies; a persistent timeout is
   const cwd = F.project();
   const job = F.start(cwd, { prompt: "WRITE_CODE" });
   await F.done(job);
-  await withEnv({ CODEX_TEAM_OBSERVATION_TIMEOUT_MS: "3000", CODEX_TEAM_TEST_OBSERVATION_DELAY_MS: "4000" }, async () => {
+  // Only the first attempt is delayed; the doubled retry bound (60 s) leaves room for real work on a loaded machine.
+  const once = path.join(F.root, "observation-delay-" + randomUUID());
+  await withEnv({ CODEX_TEAM_OBSERVATION_TIMEOUT_MS: "30000", CODEX_TEAM_TEST_OBSERVATION_DELAY_MS: "40000", CODEX_TEAM_TEST_OBSERVATION_DELAY_ONCE: once }, async () => {
     R.verifyJob({ cwd, jobId: job.jobId });
     const state = await settle(job);
     assert.equal(state.verification.status, "passed", JSON.stringify(state.verification));
     assert.deepEqual(state.verification.observation.attempts.map(a => a.outcome), ["timed_out", "observed"]);
     assert.ok(Number.isFinite(state.verification.observationCostMs));
   });
-  await withEnv({ CODEX_TEAM_OBSERVATION_TIMEOUT_MS: "1000", CODEX_TEAM_TEST_OBSERVATION_DELAY_MS: "8000" }, async () => {
+  // A fresh job: an unchanged, already verified job with a ready packet is not verified again.
+  const stuckCwd = F.project(), stuck = F.start(stuckCwd, { prompt: "WRITE_CODE" });
+  await F.done(stuck);
+  await withEnv({ CODEX_TEAM_OBSERVATION_TIMEOUT_MS: "1000", CODEX_TEAM_TEST_OBSERVATION_DELAY_MS: "4000" }, async () => {
+    const job = stuck, cwd = stuckCwd;
     R.verifyJob({ cwd, jobId: job.jobId });
     const state = await settle(job);
     assert.equal(state.status, "verification_failed");
@@ -132,6 +138,9 @@ test("P2: a slow observation retries and still verifies; a persistent timeout is
     const view = compactJob(state);
     assert.equal(view.status, "verification_failed");
     assert.equal(view.checks.status, "observer_timeout");
+    // The delayed observation thread outlives the job briefly; let its process exit before fixture cleanup.
+    const end = Date.now() + 30000;
+    while (S.alive(state.workerPid) && Date.now() < end) await new Promise(r => setTimeout(r, 250));
   });
 });
 
@@ -162,7 +171,7 @@ test("P1: an unseen folder gets the long first-run bound, and one probe timeout 
   const mode = m => { fs.writeFileSync(control, JSON.stringify({ mode: m })); fs.rmSync(control + ".calls", { force: true }); };
   assert.equal(D.probeBound({ firstRun: true, env: {} }), 180000);
   assert.equal(D.probeBound({ firstRun: false, env: {} }), 60000);
-  await withEnv({ CODEX_TEAM_FAKE_PROBE: control, CODEX_TEAM_PROBE_TIMEOUT_MS: "1500" }, async () => {
+  await withEnv({ CODEX_TEAM_FAKE_PROBE: control, CODEX_TEAM_PROBE_TIMEOUT_MS: "8000" }, async () => {
     mode("timeout-once");
     const cwd = F.project(), binary = R.resolveCodex(), runtime = D.inspectRuntime(binary, cwd);
     const first = D.probeRuntime(binary, runtime, cwd, { force: true, timeoutMs: 20000 });
@@ -595,4 +604,18 @@ test("P8: scouts reading through a PowerShell literal list earn evidence only wh
   assert.equal(outputShowsContent("anything", "{\n}\n"), false, "files without a substantial line cannot be proven");
   const literal = { type: "item.completed", item: { type: "command_execution", command: "powershell.exe -Command 'Get-Location; git status --short; Get-Content existing.txt'", status: "completed", exit_code: 0, aggregated_output: "x" } };
   assert.deepEqual([...fileReads([literal], ["existing.txt"], cwd)], ["existing.txt"], "literal compound reads are unchanged");
+});
+
+test("P1: a manual doctor probe gets a first-run budget, not the old 20 s", async () => {
+  assert.equal(D.PROBE_BUDGET_MS, 200000);
+  assert.ok(D.PROBE_BUDGET_MS > D.probeBound({ firstRun: true, env: {} }), "room for one first-run attempt and a retry");
+  if (process.platform !== "win32") return;
+  const control = path.join(F.root, "probe-doctor.json");
+  fs.writeFileSync(control, JSON.stringify({ mode: "timeout-once" })); fs.rmSync(control + ".calls", { force: true });
+  await withEnv({ CODEX_TEAM_FAKE_PROBE: control, CODEX_TEAM_PROBE_TIMEOUT_MS: "8000" }, async () => {
+    const report = R.doctor({ cwd: F.project(), probe: true });
+    assert.equal(report.sandbox.status, "passed", JSON.stringify(report.sandbox));
+    assert.deepEqual(report.sandbox.attempts.map(a => a.outcome), ["timed_out", "passed"]);
+  });
+  fs.writeFileSync(control, JSON.stringify({ mode: "pass" }));
 });
