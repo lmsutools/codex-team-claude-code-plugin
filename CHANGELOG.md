@@ -18,7 +18,7 @@
 ### Fixes
 
 1. **First-run sandbox setup.**
-   - The preflight before the first model call gives a folder this runtime has never set up a 180 s bound, or 60 s once the folder is warm. `CODEX_TEAM_PROBE_TIMEOUT_MS` overrides the bound.
+   - The preflight before the first model call gives a folder this runtime has never set up a 180 s bound, or 60 s once the folder is warm. `CODEX_TEAM_PROBE_TIMEOUT_MS` overrides the bound. `codex_doctor probe=true` gets a 200 s total budget (it was 20 s).
    - The preflight is retried once after a timeout, after a runner start timeout, or when another process holds a runtime file (os error 32, often the Codex desktop app). A held file is named in the recovery steps and in the doctor hint.
    - "Timed out after 15000ms waiting for runner spawn_ready" is classified as the transient `sandbox_spawn_timeout` and is never cached as project health. When it stops the worker, the same thread resumes once after a fresh preflight. A sandboxed check whose runner never started is run once more.
 2. **Verification under load.** The post-check observation is bounded by at least 180 s or 8× the measured snapshot cost, at most 15 min, and gets one doubled retry. `CODEX_TEAM_OBSERVATION_TIMEOUT_MS` overrides the bound. A persistent timeout is recorded as `verification.status: "observer_timeout"`, together with the check results, and the acceptance refusal says that the checks did not fail. An abnormal end never leaves `running` behind.
