@@ -536,3 +536,25 @@ test("P1: a runtime file held by another process (os error 32) is named, retried
     mode("pass");
   });
 });
+
+test("1.2.2: release metadata and the lead skill contract", () => {
+  for (const file of ["../package.json", "../.claude-plugin/plugin.json"])
+    assert.equal(JSON.parse(fs.readFileSync(new URL(file, import.meta.url), "utf8")).version, "1.2.2");
+  assert.match(fs.readFileSync(new URL("../scripts/server.mjs", import.meta.url), "utf8"), /serverInfo: \{ name: "codex-team", version: "1\.2\.2" \}/);
+  const skill = fs.readFileSync(new URL("../skills/lead/SKILL.md", import.meta.url), "utf8");
+  assert.equal(skill.match(/^## 1\.2\.2: latest CLI, service tiers and load resilience$/gm).length, 1);
+  for (const phrase of [/serviceTier/, /observer_timeout/, /alreadyFinished/, /Codex never commits/, /autoPassEnv/, /cli-compat\.mjs/])
+    assert.match(skill, phrase);
+  assert.ok(skill.trimEnd().endsWith("<!-- END CODEX-TEAM 1.2.2 LATEST CLI AND SERVICE TIERS -->"));
+  assert.ok(fs.readFileSync(new URL("../CHANGELOG.md", import.meta.url), "utf8").includes("## 1.2.2"));
+});
+
+test("P8: scout briefs are steered to literal paths (a real 0.163.0 scout wrote prose into draft scope)", async () => {
+  const { scoutReportSchema, scoutReport } = await import("../scripts/contracts.mjs");
+  assert.match(scoutReportSchema.properties.files.items.properties.path.description, /Literal relative path/);
+  assert.match(scoutReportSchema.properties.draftAssignment.properties.scope.items.description, /No descriptions/);
+  assert.match(buildWorkerPrompt({ mode: "scout", prompt: "x", timeoutSeconds: 60 }), /literal relative paths only/);
+  const brief = { summary: "s", files: [{ path: "src/math.mjs", lines: [{ startLine: 1, endLine: 2 }], why: "w" }], dataFlow: [], risks: [], openQuestions: [], handbookNotes: [], sandboxLimits: [],
+    draftAssignment: { objective: "o", scope: ["src/math.mjs: export function subtract(a, b)"], constraints: [], decisions: [], dependencies: [], acceptanceCriteria: ["c"], verification: [{ id: "t", command: "node", args: ["--test"], timeoutSeconds: 60, passEnv: [], criteria: [0], allowInline: false, host: false }] } };
+  assert.throws(() => scoutReport(brief), /Scope paths must be literal/, "validation stays strict");
+});

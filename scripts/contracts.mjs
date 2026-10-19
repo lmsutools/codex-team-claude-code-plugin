@@ -173,8 +173,10 @@ const schemaStrings = { type: "array", items: schemaText() };
 const strictObject = (properties) => ({
   type: "object", additionalProperties: false, properties, required: Object.keys(properties),
 });
+// Found in a real 0.163.0 scout run: without guidance the model wrote "src/math.mjs: export ..." as a scope entry.
+const literalPath = { type: "string", description: "Literal relative path with forward slashes, for example src/math.mjs. No descriptions, colons, globs or line numbers." };
 const draftSchema = strictObject({
-  objective: schemaText(), scope: { ...schemaStrings },
+  objective: schemaText(), scope: { type: "array", description: "Literal relative files or directories only; put intent in objective or constraints.", items: literalPath },
   constraints: schemaStrings, decisions: schemaStrings, dependencies: schemaStrings,
   acceptanceCriteria: { type: "array", items: { anyOf: [
     schemaText(), strictObject({ id: { type: ["string", "null"] }, text: schemaText(), tags: schemaStrings }),
@@ -188,7 +190,7 @@ const draftSchema = strictObject({
 export const scoutReportSchema = strictObject({
   summary: schemaText(),
   files: { type: "array", items: strictObject({
-    path: schemaText(),
+    path: literalPath,
     lines: { type: "array", items: strictObject({
       startLine: { type: "integer", minimum: 1, maximum: 2147483647 },
       endLine: { type: "integer", minimum: 1, maximum: 2147483647 },
