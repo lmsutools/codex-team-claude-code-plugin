@@ -558,3 +558,20 @@ test("P8: scout briefs are steered to literal paths (a real 0.163.0 scout wrote 
     draftAssignment: { objective: "o", scope: ["src/math.mjs: export function subtract(a, b)"], constraints: [], decisions: [], dependencies: [], acceptanceCriteria: ["c"], verification: [{ id: "t", command: "node", args: ["--test"], timeoutSeconds: 60, passEnv: [], criteria: [0], allowInline: false, host: false }] } };
   assert.throws(() => scoutReport(brief), /Scope paths must be literal/, "validation stays strict");
 });
+
+test("P8: worktree integration checks the original against its own baseline (core.autocrlf checkouts differ byte-wise)", async () => {
+  // Found in the real 0.163.0 smoke: the original's clean files were LF, the fresh worktree checkout CRLF.
+  const cwd = F.project();
+  git(cwd, ["config", "core.autocrlf", "true"]);
+  assert.equal(fs.readFileSync(path.join(cwd, "existing.txt"), "utf8"), "Baseline input\n");
+  const job = F.start(cwd, { prompt: "WRITE_TARGET=existing.txt", isolation: "worktree", assignment: F.assignment({ scope: ["existing.txt"] }) });
+  const done = await F.done(job);
+  assert.equal(fs.readFileSync(path.join(done.executionCwd, "existing.txt"), "utf8"), "export const answer = 42;\n");
+  R.verifyJob({ cwd, jobId: job.jobId });
+  await settle(job);
+  assert.equal(F.accept(job).status, "accepted");
+  const integrated = R.integrateJob({ cwd, jobId: job.jobId });
+  assert.equal(integrated.integration.status, "applied");
+  assert.deepEqual(integrated.integration.files, ["existing.txt"]);
+  assert.equal(fs.readFileSync(path.join(cwd, "existing.txt"), "utf8"), "export const answer = 42;\n");
+});

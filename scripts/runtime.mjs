@@ -54,7 +54,7 @@ import { contextKey } from "./continuity.mjs";
 import { queueStateCard, leadContext } from "./lead-state.mjs";
 export { workspace, stateRoot } from "./store.mjs";
 const self = fileURLToPath(import.meta.url);
-const VERSION = "1.2.1";
+const VERSION = "1.2.2";
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const json = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const artifact = (id, name) => path.join(S.jobDir(id), name);
@@ -1476,6 +1476,7 @@ export function integrateJob(input) {
       state.executionCwd,
       state.baseline,
       current,
+      state.originBaseline,
     );
     return summary(
       S.save({

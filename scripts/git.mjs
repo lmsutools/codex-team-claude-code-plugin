@@ -142,7 +142,13 @@ export function changes(before, after, scope = ["."]) {
       before.head !== after.head || before.indexHash !== after.indexHash,
   };
 }
-export function integrateFiles(origin, worktree, before, after) {
+/**
+ * `originBefore`, when given, is the original project's own snapshot from job
+ * start. A fresh worktree checkout can differ byte-wise from the original's
+ * clean working files (core.autocrlf, eol attributes), so the original is
+ * checked against its own baseline, not the worktree's.
+ */
+export function integrateFiles(origin, worktree, before, after, originBefore = null) {
   const delta = changes(before, after);
   const originals = new Map();
   // Complete preflight before the first write; use literal, contained regular files.
@@ -153,10 +159,11 @@ export function integrateFiles(origin, worktree, before, after) {
       throw new Error(
         `Integration would overwrite an existing untracked or ignored file: ${name}`,
       );
+    const expected = originBefore?.files?.[name] || before.files[name];
     if (
       before.files[name] &&
       (!fs.existsSync(dest) ||
-        hash(fs.readFileSync(dest)) !== before.files[name].hash)
+        hash(fs.readFileSync(dest)) !== expected.hash)
     )
       throw new Error(
         `Original file changed during integration preflight: ${name}`,
