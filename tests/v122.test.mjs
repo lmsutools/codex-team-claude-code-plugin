@@ -13,6 +13,8 @@ import { buildStateCard } from "../scripts/lead-state.mjs";
 import * as D from "../scripts/diagnostics.mjs";
 import { classifyTransientFailure, continuationPrompt } from "../scripts/recovery.mjs";
 import { buildWorkerPrompt } from "../scripts/worker-prompt.mjs";
+import { gitSecuritySnapshot, compareGitSecurity, observerEnvironment, configEntries, partitionConfig } from "../scripts/git-security.mjs";
+import { git } from "../scripts/git.mjs";
 const F = fixture("v122");
 const withEnv = async (values, run) => {
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
@@ -201,4 +203,49 @@ test("P1: a sandboxed check whose runner never started is run once more", async 
   assert.equal(check.status, "passed", JSON.stringify(check));
   assert.equal(check.attempts.length, 2);
   assert.equal(check.attempts[0].sandboxRunnerStartTimeout, true);
+});
+
+// ── P4: Git configuration observations in linked worktrees ──
+
+test("P4: sibling branch-tracking entries and injected GIT_CONFIG_* never count as a configuration change", () => {
+  const main = F.project(), linked = path.join(F.root, "linked-" + randomUUID().slice(0, 8));
+  git(main, ["worktree", "add", "--quiet", "-b", "lane", linked]);
+  const before = gitSecuritySnapshot(linked);
+  assert.equal(before.version, 2);
+  assert.equal(before.shared, true);
+  // What `git push -u` from another worktree writes into the shared common config.
+  git(main, ["config", "branch.platform/other-lane.remote", "origin"]);
+  git(main, ["config", "branch.platform/other-lane.merge", "refs/heads/platform/other-lane"]);
+  const tracking = compareGitSecurity(before, gitSecuritySnapshot(linked));
+  assert.equal(tracking.changed, false, JSON.stringify(tracking));
+  assert.deepEqual(tracking.ignored.paths.sort(), ["config", "effectiveConfig"]);
+  assert.equal(tracking.sharedGitDirectory, true);
+  const injected = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.fsmonitor", GIT_CONFIG_VALUE_0: "evil", GIT_CONFIG_PARAMETERS: "'core.pager'='evil'" };
+  const saved = Object.fromEntries(Object.keys(injected).map(k => [k, process.env[k]]));
+  Object.assign(process.env, injected);
+  let underInjection;
+  try {
+    assert.deepEqual(Object.keys(observerEnvironment()).filter(k => /^GIT_/i.test(k)), []);
+    underInjection = gitSecuritySnapshot(linked);
+  } finally { for (const [k, v] of Object.entries(saved)) if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  assert.equal(compareGitSecurity(before, underInjection).changed, false, "injected environment is not repository state");
+  // A real change in the shared config still counts and says where it lives.
+  git(main, ["config", "core.hooksPath", "elsewhere"]);
+  const real = compareGitSecurity(before, gitSecuritySnapshot(linked));
+  assert.equal(real.changed, true);
+  assert.ok(real.paths.includes("config") && real.paths.includes("effectiveConfig"), JSON.stringify(real));
+  assert.match(real.heading, /shared with sibling worktrees/);
+  const entries = configEntries("file:a\0branch.x.remote\norigin\0command line:\0core.pager\nless\0", true);
+  assert.deepEqual(partitionConfig(entries).relevant, []);
+  assert.equal(partitionConfig(entries).benign.length, 1);
+  assert.equal(partitionConfig(configEntries("remote.origin.url\nhttps://x\0branch.x.mergeoptions\n--no-ff\0")).relevant.length, 2, "remote URLs and merge options stay relevant");
+});
+
+test("P4: a 1.2.1 snapshot still compares by its raw digests", () => {
+  const cwd = F.project();
+  const now = gitSecuritySnapshot(cwd);
+  const legacyBefore = { entries: now.legacy, hash: "old" };
+  assert.equal(compareGitSecurity(legacyBefore, now).changed, false);
+  git(cwd, ["config", "branch.main.description", "touched"]);
+  assert.equal(compareGitSecurity(legacyBefore, gitSecuritySnapshot(cwd)).changed, true, "old snapshots keep their old, conservative meaning");
 });
