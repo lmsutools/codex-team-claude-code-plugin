@@ -2,6 +2,7 @@
 import { runObservation, otherActiveJobs } from "./run-observation.mjs";
 import { untrustedOutput } from "./untrusted-output.mjs";
 import { reportPreview, SCOUT_NEXT } from "./report-preview.mjs";
+import { tierLabel } from "./service-tier.mjs";
 import { fileURLToPath } from "node:url";
 export function validateDetail(detail = "compact") {
   if (!["compact", "full"].includes(detail)) throw new Error("Invalid detail; use compact or full.");
@@ -32,6 +33,8 @@ export function compactJob(state, { waitScript, showAutoVerify = false } = {}) {
     ...(state.typicalDurationSeconds !== undefined ? {typicalDurationSeconds:state.typicalDurationSeconds} : {}),
     ...(state.otherActiveJobs ? {otherActiveJobs:state.otherActiveJobs.map(job=>({...job}))} : {}),
     ...(state.review ? { reviewMode: state.review.mode } : {}),
+    ...(tierLabel(state) ? { serviceTier: tierLabel(state) } : {}),
+    ...(showAutoVerify && state.serviceTierAdvice ? { serviceTierAdvice: oneLine(state.serviceTierAdvice, 300) } : {}),
     ...(showAutoVerify && state.autoVerify !== undefined ? {autoVerify:state.autoVerify,autoVerifyReason:state.autoVerifyReason} : {}),
     jobId: state.jobId, status: oneLine(state.status, 60),
     progress: oneLine(state.progress || state.status),

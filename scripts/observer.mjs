@@ -41,7 +41,7 @@ const fields = {
   guard: ["status", "startedAt", "modelChildStartedAt", "finishedAt"],
   card: ["status", "startedAt", "finishedAt", "livePhase", "decisionPacket.criteria"],
   status: ["runningCommandStartedAt", "lastEventAt", "readableTail", "checkPlan.checks", "assignment.verification", "activeCheck.host", "status", "startedAt", "finishedAt", "livePhase", "requestId", "assignment.objective", "progress", "lastCommand", "model", "threadId", "modelChildStartedAt", "usage", "execs"],
-  tokens: ["mode", "readOnly", "containmentVersion", "executionReadOnly", "status", "startedAt", "finishedAt", "livePhase", "model", "threadId", "modelChildStartedAt", "usage", "execs", "implementationFinishedAt", "reviewerStartedAt", "acceptedAt", "committedAt", "integration.committedAt", "delivery.at", "delivery.implementationCommit", "lineStats", "lineStatsAt"],
+  tokens: ["mode", "readOnly", "containmentVersion", "executionReadOnly", "status", "startedAt", "finishedAt", "livePhase", "model", "threadId", "modelChildStartedAt", "usage", "execs", "implementationFinishedAt", "reviewerStartedAt", "acceptedAt", "committedAt", "integration.committedAt", "delivery.at", "delivery.implementationCommit", "lineStats", "lineStatsAt", "serviceTier", "serviceTierInherited.tier", "serviceTierOmitted.tier", "serviceTierOmitted.model"],
 };
 export function extractJobs(db, cwds, view = "tokens", limit = 256, byId = false) {
   const selected = fields[view];

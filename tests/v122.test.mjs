@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fixture, S, R } from "./job-b-fixture.mjs";
@@ -15,6 +16,20 @@ import { classifyTransientFailure, continuationPrompt } from "../scripts/recover
 import { buildWorkerPrompt } from "../scripts/worker-prompt.mjs";
 import { gitSecuritySnapshot, compareGitSecurity, observerEnvironment, configEntries, partitionConfig } from "../scripts/git-security.mjs";
 import { git } from "../scripts/git.mjs";
+import { toolchainPassEnv, toolchainHint, workerToolchainEnv } from "../scripts/toolchain-env.mjs";
+import { checkInvocation } from "../scripts/sandbox-checks.mjs";
+import { tierLabel, tierShort, effectiveTier, omittedTier, catalogAdvice, configuredTier, assertTierSupported, resetFeatureCache, validateTier } from "../scripts/service-tier.mjs";
+import { packet } from "../scripts/wait.mjs";
+import { summarize, render } from "../scripts/tokens.mjs";
+import { salvageRun } from "../scripts/salvage.mjs";
+import { instructionSnapshot } from "../scripts/review-instructions.mjs";
+import { reportSchema } from "../scripts/contracts.mjs";
+import { snapshot } from "../scripts/git.mjs";
+import { cliCompatibility, REQUIRED } from "../scripts/cli-compat.mjs";
+import { sandboxProbe } from "../scripts/sandbox-probe.mjs";
+import { runInNewContext } from "node:vm";
+// Resolve before the fixture substitutes fake-codex: the opt-in real-CLI test checks the selected launcher.
+const realCli = process.env.CODEX_TEAM_REAL_CLI === "1" ? (() => { try { return { binary: R.resolveCodex(), home: process.env.CODEX_HOME || path.join(os.homedir(), ".codex") }; } catch (error) { return { error }; } })() : null;
 const F = fixture("v122");
 const withEnv = async (values, run) => {
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
@@ -248,4 +263,249 @@ test("P4: a 1.2.1 snapshot still compares by its raw digests", () => {
   assert.equal(compareGitSecurity(legacyBefore, now).changed, false);
   git(cwd, ["config", "branch.main.description", "touched"]);
   assert.equal(compareGitSecurity(legacyBefore, gitSecuritySnapshot(cwd)).changed, true, "old snapshots keep their old, conservative meaning");
+});
+
+// ── P5: commits after acceptance ──
+
+test("P5: accepted work names who commits it: the lead, codex_integrate for worktrees", async () => {
+  const cwd = F.project();
+  const job = F.start(cwd, { prompt: "WRITE_CODE" });
+  await F.done(job);
+  R.verifyJob({ cwd, jobId: job.jobId });
+  await settle(job);
+  const accepted = F.accept(job);
+  assert.equal(accepted.status, "accepted");
+  assert.match(compactJob(accepted).next, /Codex never commits.*git add -- <files> and git commit/);
+  const isolated = F.start(F.project(), { prompt: "WRITE_CODE", isolation: "worktree" });
+  await F.done(isolated);
+  R.verifyJob({ cwd: isolated.cwd, jobId: isolated.jobId });
+  await settle(isolated);
+  assert.match(F.accept(isolated).next, /codex_integrate copies the reviewed files/);
+});
+
+// ── P6: Rust toolchain homes in the network-off sandbox ──
+
+test("P6: cargo/rustc/rustup checks receive CARGO_HOME/RUSTUP_HOME; other checks do not", () => {
+  const env = { CARGO_HOME: "D:/tools/cargo", rustup_home: "D:/tools/rustup", PATH: "x" };
+  assert.deepEqual(toolchainPassEnv("C:/tools/cargo/bin/cargo.exe", [], env), ["CARGO_HOME", "RUSTUP_HOME"]);
+  assert.deepEqual(toolchainPassEnv("rustup", ["CARGO_HOME"], env), ["RUSTUP_HOME"]);
+  assert.deepEqual(toolchainPassEnv("cargo-nextest", [], env), ["CARGO_HOME", "RUSTUP_HOME"]);
+  assert.deepEqual(toolchainPassEnv(process.execPath, [], env), []);
+  assert.deepEqual(toolchainPassEnv("cargo", [], { PATH: "x" }), []);
+  assert.deepEqual(workerToolchainEnv(env), ["CARGO_HOME", "RUSTUP_HOME"]);
+  const offline = "error: no matching package named `serde` found\nlocation searched: registry `crates-io`";
+  assert.match(toolchainHint({ passEnv: [] }, offline, env), /did not receive CARGO_HOME and RUSTUP_HOME.*passEnv: \["CARGO_HOME","RUSTUP_HOME"\]/);
+  assert.match(toolchainHint({ passEnv: ["CARGO_HOME"], autoPassEnv: ["RUSTUP_HOME"] }, offline, env), /although CARGO_HOME\/RUSTUP_HOME were passed/);
+  assert.match(toolchainHint({}, "error: toolchain 'stable-x86_64-pc-windows-msvc' is not installed", { PATH: "x" }), /not set on the host/);
+  assert.equal(toolchainHint({}, "assertion failed", env), null);
+  assert.equal(toolchainHint({ host: true }, offline, env), null);
+});
+
+test("P6: the sandboxed check invocation and Codex's shell policy carry the toolchain homes", async () => {
+  await withEnv({ CARGO_HOME: path.join(F.root, "cargo-home"), RUSTUP_HOME: path.join(F.root, "rustup-home") }, async () => {
+    const cwd = F.project(), jobId = randomUUID();
+    const invocation = checkInvocation({ executionCwd: cwd, jobId }, { command: "C:/tools/cargo/bin/cargo.exe", args: ["test", "--offline"] }, R.resolveCodex());
+    try {
+      assert.deepEqual(invocation.autoPassEnv, ["CARGO_HOME", "RUSTUP_HOME"]);
+      assert.equal(invocation.env.CARGO_HOME, process.env.CARGO_HOME);
+      const policy = invocation.args.find(a => a.startsWith("shell_environment_policy.include_only="));
+      assert.match(policy, /CARGO_HOME/); assert.match(policy, /RUSTUP_HOME/);
+      const node = checkInvocation({ executionCwd: cwd, jobId }, { command: process.execPath, args: ["-v"] }, R.resolveCodex());
+      try { assert.deepEqual(node.autoPassEnv, []); assert.equal(node.env.CARGO_HOME, undefined); } finally { node.cleanup?.(); }
+    } finally { invocation.cleanup?.(); }
+    const args = R.buildArgs({ jobId, cwd, executionCwd: cwd, threadId: null }, "report.txt");
+    assert.match(args.find(a => a.startsWith("shell_environment_policy.include_only=")), /CARGO_HOME.*RUSTUP_HOME|RUSTUP_HOME.*CARGO_HOME/);
+    assert.equal(R.doctor({}).toolchain.CARGO_HOME, "set");
+  });
+});
+
+test("P6: a sandboxed check that fails like offline cargo carries a toolchain hint", async () => {
+  await withEnv({ CARGO_HOME: path.join(F.root, "cargo-home") }, async () => {
+    const cwd = F.project();
+    const script = 'console.error("error: no matching package named `serde` found");process.exit(101)';
+    const job = F.start(cwd, { prompt: "WRITE_CODE", assignment: F.assignment({ verification: [{ id: "answer", allowInline: true, criteria: [0], command: process.execPath, args: ["-e", script], timeoutSeconds: 30 }] }) });
+    await F.done(job);
+    R.verifyJob({ cwd, jobId: job.jobId });
+    const state = await settle(job);
+    assert.equal(state.verification.checks[0].status, "failed");
+    assert.match(state.verification.checks[0].toolchainHint, /did not receive CARGO_HOME.*passEnv: \["CARGO_HOME"/);
+  });
+});
+
+// ── P7: service tiers ──
+
+test("P7: serviceTier is validated, passed as -c service_tier, inherited by revisions and shown everywhere", async () => {
+  resetFeatureCache();
+  assert.throws(() => validateTier("turbo"), /serviceTier must be default, fast, priority or ultrafast/);
+  assert.throws(() => F.start(F.project(), { prompt: "WRITE_CODE", serviceTier: "turbo" }), /serviceTier must be/);
+  const cwd = F.project();
+  const job = F.start(cwd, { prompt: "WRITE_CODE", serviceTier: "ultrafast" });
+  assert.equal(compactJob({ ...job }).serviceTier, "ultrafast");
+  const done = await F.done(job);
+  assert.equal(done.serviceTier, "ultrafast");
+  assert.deepEqual(done.effectiveServiceTier, { requested: "ultrafast", source: "explicit", effective: "ultrafast" });
+  const captured = JSON.parse(fs.readFileSync(path.join(S.jobDir(job.jobId), "captured.json"), "utf8"));
+  assert.ok(captured.args.includes('service_tier="ultrafast"'), captured.args.join(" "));
+  assert.equal(packet(S.readRaw(job.jobId), process.env.CODEX_TEAM_STATE).serviceTier, "ultrafast");
+  const revision = F.start(cwd, { resumeJobId: job.jobId, prompt: "WRITE_REVISION" });
+  assert.equal(revision.serviceTier, "ultrafast");
+  await F.done(revision);
+  const resumed = JSON.parse(fs.readFileSync(path.join(S.jobDir(revision.jobId), "captured.json"), "utf8"));
+  assert.ok(resumed.args.includes("resume") && resumed.args.includes('service_tier="ultrafast"'));
+  const plain = F.start(F.project(), { prompt: "WRITE_CODE" });
+  assert.equal("serviceTier" in S.readRaw(plain.jobId), false, "no tier key: 1.2.1 request identities are unchanged");
+  await F.done(plain);
+});
+
+test("P7: an explicit tier the selected CLI cannot honor fails with a clear error", async () => {
+  const binary = R.resolveCodex();
+  for (const [features, tier, pattern] of [
+    ["fast_mode=true", "ultrafast", /not supported by .*no ultrafast_mode feature.*0\.153\.2 does not/],
+    ["fast_mode=true,ultrafast_mode=false", "ultrafast", /disabled in .*ultrafast_mode is off/],
+    ["fail", "fast", /cannot be confirmed .*features list/],
+  ]) {
+    resetFeatureCache();
+    await withEnv({ CODEX_TEAM_FAKE_FEATURES: features }, async () => {
+      assert.throws(() => assertTierSupported(tier, binary), pattern);
+      assert.throws(() => F.start(F.project(), { prompt: "WRITE_CODE", serviceTier: tier }), pattern);
+    });
+  }
+  resetFeatureCache();
+  await withEnv({ CODEX_TEAM_FAKE_FEATURES: "fast_mode=true" }, async () => {
+    assert.equal(assertTierSupported("priority", binary).feature, "fast_mode");
+    assert.equal(assertTierSupported("default", binary).checked, false, "default needs no feature");
+  });
+  resetFeatureCache();
+});
+
+test("P7: an inherited or dropped tier is reported honestly in status, waiter and footer", async () => {
+  const home = process.env.CODEX_HOME, config = path.join(home, "config.toml"), catalog = path.join(home, "models_cache.json");
+  fs.writeFileSync(config, 'model = "gpt-test"\nservice_tier = "ultrafast"\n[profiles.other]\nservice_tier = "fast"\n');
+  fs.writeFileSync(catalog, JSON.stringify({ fetched_at: "2026-10-19T01:56:30Z", client_version: "0.163.0", models: [{ slug: "gpt-test", service_tiers: [{ id: "priority", name: "Fast" }], additional_speed_tiers: ["fast"] }] }));
+  try {
+    assert.deepEqual(configuredTier(F.root, home), { tier: "ultrafast", file: config });
+    assert.match(catalogAdvice("ultrafast", "gpt-test", home), /does not advertise "ultrafast" for gpt-test \(advertised: priority, fast\)/);
+    assert.equal(catalogAdvice("priority", "gpt-test", home), null);
+    const cwd = F.project();
+    const job = F.start(cwd, { prompt: "WRITE_CODE" });
+    assert.equal(job.serviceTierInherited.tier, "ultrafast");
+    assert.match(compactJob(job, { showAutoVerify: true }).serviceTierAdvice, /does not advertise "ultrafast"/);
+    assert.equal(compactJob(job).serviceTier, "ultrafast (config)");
+    await F.done(job);
+    const captured = JSON.parse(fs.readFileSync(path.join(S.jobDir(job.jobId), "captured.json"), "utf8"));
+    assert.equal(captured.args.some(a => a.startsWith("service_tier=")), false, "an inherited tier is left to the CLI");
+  } finally { fs.rmSync(config, { force: true }); fs.rmSync(catalog, { force: true }); }
+  await withEnv({ CODEX_TEAM_FAKE_UNADVERTISED: "ultrafast" }, async () => {
+    const job = F.start(F.project(), { prompt: "WRITE_CODE", serviceTier: "ultrafast" });
+    const done = await F.done(job);
+    assert.deepEqual({ tier: done.serviceTierOmitted.tier, model: done.serviceTierOmitted.model }, { tier: "ultrafast", model: "gpt-test" });
+    assert.equal(compactJob(done).serviceTier, "default (ultrafast omitted by the CLI: not advertised for gpt-test)");
+    assert.match(packet(S.readRaw(job.jobId), process.env.CODEX_TEAM_STATE).serviceTier, /omitted by the CLI/);
+    assert.equal(effectiveTier(done).effective, "default");
+  });
+  assert.deepEqual(omittedTier({ type: "item.completed", item: { type: "error", message: "Configured service tier `ultrafast` is not advertised as supported for model `gpt-6-astra` and will be omitted from requests." } }), { tier: "ultrafast", model: "gpt-6-astra" });
+  assert.equal(omittedTier({ type: "item.completed", item: { type: "agent_message", text: "Configured service tier `ultrafast` is not advertised as supported for model `x`" } }), null, "model prose is not a CLI notice");
+  assert.equal(tierShort({ serviceTier: "ultrafast", serviceTierOmitted: { tier: "ultrafast", model: "m" } }), "ultrafast→default (omitted)");
+  assert.equal(tierShort({ serviceTierInherited: { tier: "priority" } }), "priority (config)");
+  assert.equal(tierLabel({}), null);
+  const now = Date.now(), job = { jobId: randomUUID(), status: "implementation_finished", serviceTier: "ultrafast", serviceTierOmitted: { tier: "ultrafast", model: "m" },
+    execs: [{ startedAt: new Date(now - 2000).toISOString(), finishedAt: new Date(now - 1000).toISOString(), usage: { input_tokens: 10, output_tokens: 2 }, model: "m" }] };
+  const summary = summarize({ transcript: { calls: [], replyFrom: 0, replyStartAt: new Date(now - 60000).toISOString() }, jobs: [job] });
+  assert.deepEqual(summary.contributor.tiers, ["ultrafast→default (omitted)"]);
+  assert.match(render({ ...summary, windows: [] }), /Re-reads: .* · Codex tier ultrafast→default \(omitted\)/);
+});
+
+// ── P8: newer CLI event shapes and the compatibility check ──
+
+test("P8: CLI notice items do not count as tool use in the tool-free finalize turn", async t => {
+  t.after(() => delete process.env.CODEX_TEAM_FAKE_RECOVERY);
+  const cwd = F.project(), jobId = randomUUID(), dir = S.jobDir(jobId);
+  fs.mkdirSync(dir, { recursive: true });
+  const state = { jobId, cwd, executionCwd: cwd, status: "running", baseline: snapshot(cwd), reviewInstructionBaseline: instructionSnapshot(cwd), startedAt: S.now(), threadId: randomUUID(), timeoutSeconds: 30, salvageSeconds: 10 };
+  S.save(state);
+  fs.writeFileSync(path.join(dir, "report-schema.json"), JSON.stringify(reportSchema));
+  const control = path.join(F.root, "finalize-" + jobId + ".json");
+  fs.writeFileSync(control, JSON.stringify({ runs: true, finalizeItem: "error" }));
+  process.env.CODEX_TEAM_FAKE_RECOVERY = control;
+  const result = await salvageRun(state, { runProcess: R.runProcess, buildArgs: R.buildArgs, binary: R.resolveCodex(), reportPath: path.join(dir, "report.txt"), eventsFile: path.join(dir, "events.jsonl"), errorFile: path.join(dir, "stderr.log"), persist: R.persist });
+  assert.equal(result.salvage.outcome, "salvaged", JSON.stringify(result.salvage));
+  S.patch(jobId, { status: "failed" });
+});
+
+test("P8: a recovered reconnect notice does not fail the reviewer or the native review", async t => {
+  const file = path.join(F.root, "reviewer-reconnect.json");
+  fs.writeFileSync(file, JSON.stringify({ reconnect: true }));
+  process.env.CODEX_TEAM_FAKE_REVIEWER = file;
+  t.after(() => delete process.env.CODEX_TEAM_FAKE_REVIEWER);
+  const job = F.start(F.project(), { prompt: "WRITE_CODE", autoVerify: true });
+  const done = await settle(job);
+  assert.equal(done.status, "verified", JSON.stringify({ status: done.status, packet: done.decisionPacket?.status, error: done.decisionPacket?.reviewerError }));
+  assert.equal(done.decisionPacket.status, "ready", done.decisionPacket.reviewerError);
+  assert.equal(done.nativeReview.status, "completed", done.nativeReview.reason);
+});
+
+test("P8: the compatibility check names every missing flag", () => {
+  const help = { exec: REQUIRED.exec.join(" "), "exec resume": REQUIRED["exec resume"].join(" "), "exec review": "--uncommitted", sandbox: REQUIRED.sandbox.join(" ") };
+  const run = (command, args) => {
+    const joined = args.slice(1).join(" ");
+    if (joined === "--version") return { status: 0, stdout: "codex-cli 9.9.9\n" };
+    if (joined === "features list") return { status: 0, stdout: "fast_mode    stable    true\nultrafast_mode    stable    true\n" };
+    const surface = args.slice(1, -1).join(" ");
+    return { status: 0, stdout: help[surface] ?? "" };
+  };
+  resetFeatureCache();
+  const ok = cliCompatibility({ command: process.execPath, prefix: ["fake-compat-a.js"] }, { run });
+  assert.equal(ok.compatible, true, JSON.stringify(ok));
+  assert.deepEqual(ok.serviceTiers, { default: true, fast: true, priority: true, ultrafast: true });
+  help.sandbox = "--cd --config";
+  const broken = cliCompatibility({ command: process.execPath, prefix: ["fake-compat-b.js"] }, { run });
+  assert.equal(broken.compatible, false);
+  assert.deepEqual(broken.surfaces.sandbox.missing, ["--permission-profile", "--include-managed-config"]);
+  resetFeatureCache();
+});
+
+test("P8: the real selected Codex CLI is compatible (opt-in)", { skip: realCli ? false : "Set CODEX_TEAM_REAL_CLI=1 (and CODEX_TEAM_CODEX) to check a real CLI without model calls." }, t => {
+  assert.ifError(realCli.error);
+  resetFeatureCache();
+  const report = cliCompatibility(realCli.binary);
+  t.diagnostic("Real CLI: " + report.version + " · " + report.executable + " · tiers " + JSON.stringify(report.serviceTiers));
+  assert.equal(report.compatible, true, JSON.stringify(report.surfaces));
+  assert.match(report.version, /codex-cli \d+\.\d+\.\d+/);
+  if (process.platform === "win32") {
+    // The host's Codex home: a fresh home selects the default sandbox mode without its setup.
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = realCli.home;
+    let probe;
+    try {
+      const cwd = F.project(), runtime = D.inspectRuntime(realCli.binary, cwd);
+      probe = D.probeRuntime(realCli.binary, runtime, cwd, { force: true, timeoutMs: 300000 });
+    } finally { process.env.CODEX_HOME = previousHome; }
+    t.diagnostic("Real preflight: " + probe.status + " · first run " + probe.firstRun + " · attempts " + JSON.stringify(probe.attempts));
+    assert.equal(probe.status, "passed", JSON.stringify(probe.failure || probe));
+  }
+  resetFeatureCache();
+});
+
+test("P8: Codex's network-off sentinel env is recognised by value; a real proxy value still counts as leaked", () => {
+  const cwd = F.project(), binary = { command: process.execPath, prefix: [] };
+  const sentinels = { ALL_PROXY: "http://127.0.0.1:9", HTTP_PROXY: "http://127.0.0.1:9", HTTPS_PROXY: "http://127.0.0.1:9", NO_PROXY: "localhost,127.0.0.1,::1",
+    GIT_HTTP_PROXY: "http://127.0.0.1:9", GIT_HTTPS_PROXY: "http://127.0.0.1:9", GIT_SSH_COMMAND: "cmd /c exit 1", GIT_ALLOW_PROTOCOLS: "",
+    CARGO_NET_OFFLINE: "true", NPM_CONFIG_OFFLINE: "true", PIP_NO_INDEX: "1", PIP_DISABLE_PIP_VERSION_CHECK: "1", SBX_NONET_ACTIVE: "1" };
+  for (const [extra, expectUnexpected] of [[{}, []], [{ HTTP_PROXY: "http://user:secret@corp-proxy:8080" }, ["HTTP_PROXY"]], [{ GIT_SSH_COMMAND: "ssh -i key" }, ["GIT_SSH_COMMAND"]]]) {
+    const run = (_executable, args, options) => {
+      let stdout = "";
+      const includeOnly = JSON.parse(args.find(a => a.startsWith("shell_environment_policy.include_only=")).slice("shell_environment_policy.include_only=".length));
+      const env = { ...Object.fromEntries(Object.entries(options.env).filter(([name]) => includeOnly.includes(name))), ...sentinels, ...extra };
+      runInNewContext(args.at(-1), {
+        process: { env }, console: { log: value => { stdout = value + "\n"; } },
+        require: name => name === "node:path" ? path : { writeFileSync: file => { if (file !== "inside" && file !== path.join(env.TEMP, "private-probe")) throw Object.assign(Error("denied"), { code: "EPERM" }); } },
+      });
+      return { status: 0, stdout, stderr: "" };
+    };
+    const result = sandboxProbe(binary, cwd, { run });
+    assert.deepEqual(result.unexpectedNames, expectUnexpected, JSON.stringify(result));
+    assert.equal(result.status, expectUnexpected.length ? "failed" : "passed");
+    if (!expectUnexpected.length) assert.deepEqual(result.networkGuard, Object.keys(sentinels).sort());
+    assert.doesNotMatch(JSON.stringify(result), /secret|127\.0\.0\.1:9/, "names only, never values");
+  }
 });

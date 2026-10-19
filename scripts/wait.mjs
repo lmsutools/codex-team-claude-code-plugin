@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { readJob, jobDirectory, stateRoot, isBusy } from "./state-reader.mjs";
 import { checksSummary, oneLine } from "./tool-output.mjs";
 import { observationTimeoutMs } from "./background-facts.mjs";
+import { tierLabel } from "./service-tier.mjs";
 const active = new Set(["starting", "running", "verifying"]);
 export function reached(state, mode) {
   return !active.has(state.status) || (mode === "finish" && !!state.implementationFinishedAt);
@@ -57,10 +58,12 @@ function reportSummary(state, dir) {
 }
 export function packet(state, root = stateRoot()) {
   const dir = jobDirectory(state.jobId, root);
-  if (state.decisionPacket) return boundedPacket({ ...state.decisionPacket, ...runObservation(state), packetStatus: state.decisionPacket.status, status: state.status, ...(state.cancelled ? { cancelled: true } : {}), ...reportPreview(state, 300),
+  if (state.decisionPacket) return boundedPacket({ ...state.decisionPacket, ...runObservation(state), packetStatus: state.decisionPacket.status, status: state.status,
+    ...(tierLabel(state) ? { serviceTier: tierLabel(state) } : {}), ...(state.cancelled ? { cancelled: true } : {}), ...reportPreview(state, 300),
     ...(state.handbookPublication ? { handbookPublication: state.handbookPublication } : {}),
     artifactPath: state.decisionPacketPath || path.join(dir, "decision-packet.json") });
   const result = { ...runObservation(state), jobId: state.jobId, status: state.status, progress: oneLine(state.progress || state.status),
+    ...(tierLabel(state) ? { serviceTier: tierLabel(state) } : {}),
     ...(state.mode === "scout" ? { mode: "scout", draftObjective: oneLine(state.result?.draftAssignment?.objective, 800) } : {}),
     ...reportPreview(state, 1000),
     ...(state.mode === "scout" && state.status === "implementation_finished" ? { next: SCOUT_NEXT } : {}),

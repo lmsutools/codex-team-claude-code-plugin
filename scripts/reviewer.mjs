@@ -78,7 +78,7 @@ async function reviewPart(state, current, hunks, index, dependencies) {
   writeJson(schemaPath, C.reviewerReportSchema);
   const reviewer = {...state, threadId: null, readOnly: true, execRole: 'reviewer', reviewRunId: 'advisory' + suffix,
     execAttempt: reviewAttempt(state,index)};
-  let report = null, error = null, finalMessage = null, threadId = null, completed = false, failed = false, usage = null, turn = 0, budgetExceeded = false;
+  let report = null, error = null, finalMessage = null, threadId = null, completed = false, failed = false, reconnecting = false, usage = null, turn = 0, budgetExceeded = false;
   const events = [], usageEvents = [];
   try {
     E.assertBudget(reviewer);
@@ -95,10 +95,12 @@ async function reviewPart(state, current, hunks, index, dependencies) {
         if (event.type === 'item.completed' && event.item?.type === 'command_execution') events.push({type:event.type,item:{type:event.item.type,command:String(event.item.command || '').length>8192 ? '' : String(event.item.command || ''),aggregated_output:String(event.item.aggregated_output || '').slice(0,65536),status:event.item.status,exit_code:event.item.exit_code}});
         if (event.type === 'item.completed' && event.item?.type === 'agent_message') finalMessage = event.item.text;
         if (event.type === 'thread.started') threadId = event.thread_id;
-        if (event.type === 'turn.started') turn++;
-        if (event.type === 'turn.failed' || event.type === 'error') failed = true;
+        if (event.type === 'turn.started') { turn++; reconnecting = false; }
+        // A top-level error followed by turn.completed is a recovered reconnect notice (newer CLIs emit these).
+        if (event.type === 'turn.failed') failed = true;
+        if (event.type === 'error') reconnecting = true;
         if (event.type === 'turn.completed') {
-          completed = true; usage = event.usage; usageEvents.push({event, turn});
+          completed = true; reconnecting = false; usage = event.usage; usageEvents.push({event, turn});
           let budget;
           try { budget = E.recordUsage(reviewer,event,turn); } catch (error) { if (!S.isBusy(error)) throw error; }
           budgetExceeded ||= !!(budget?.exceeded.length && PC.enforced(state.profile,'budget'));
@@ -115,7 +117,7 @@ async function reviewPart(state, current, hunks, index, dependencies) {
     if (outcome.stopReason) throw Error('Reviewer stopped: ' + outcome.stopReason);
     if (outcome.parseError) throw Error('Reviewer event-stream failure: ' + outcome.parseError);
     if (outcome.code !== 0) throw Error('Reviewer exit-code failure: ' + outcome.code);
-    if (!completed || failed) throw Error('Reviewer completion failure: no successful final turn.');
+    if (!completed || failed || reconnecting) throw Error('Reviewer completion failure: no successful final turn.');
     if (!threadId || threadId === state.threadId || (state.execs || []).some(e => e.threadId === threadId)) throw Error('Reviewer thread failure: a fresh thread is required.');
     const raw = PC.boundedRead(reportPath, 1024 * 1024);
     if (typeof finalMessage !== 'string' || finalMessage.trim() !== raw.trim()) throw Error('Reviewer provenance failure: final event message does not match the output file.');

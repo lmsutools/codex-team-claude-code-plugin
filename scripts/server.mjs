@@ -107,6 +107,12 @@ const definitions = [
         salvageSeconds: { type: "integer", minimum: 0, maximum: 300, description: "Read-only deadline finalize window; 0 disables. Default min(300, 10% of timeout)." },
         maxRevisions: { type: "integer", minimum: 0, maximum: 50 },
         model: str("Optional explicit Codex model; otherwise inherit."),
+        serviceTier: {
+          type: "string",
+          enum: ["default", "fast", "priority", "ultrafast"],
+          description:
+            "Optional Codex service tier, passed as -c service_tier=<tier>; omitted inherits the CLI configuration. Validated against the selected CLI (ultrafast needs its ultrafast_mode feature). Revisions inherit it. The CLI drops a tier the model does not advertise; status shows the effective tier.",
+        },
         effort: {
           type: "string",
           enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],

@@ -10,6 +10,13 @@ if (args[0] === "--version") {
   console.log(process.env.CODEX_TEAM_FAKE_VERSION || "codex-cli test");
   process.exit(0);
 }
+if (args[0] === "features" && args[1] === "list") {
+  // Mirrors `codex features list`: name, stage, enabled. CODEX_TEAM_FAKE_FEATURES="fast_mode=true,ultrafast_mode=false".
+  const spec = process.env.CODEX_TEAM_FAKE_FEATURES ?? "fast_mode=true,ultrafast_mode=true";
+  if (spec === "fail") { console.error("unknown subcommand features"); process.exit(2); }
+  for (const pair of spec.split(",").filter(Boolean)) { const [name, enabled] = pair.split("="); console.log(name.padEnd(40) + " stable             " + enabled); }
+  process.exit(0);
+}
 if (args[0] === "login") {
   console.log("Logged in using test fixture");
   process.exit(0);
@@ -90,6 +97,7 @@ if (args.includes('review') && args.includes('--uncommitted')) {
   if (control.nativeDelay) await new Promise(r=>setTimeout(r,control.nativeDelay));
   if (control.nativeFail) { console.log(JSON.stringify({type:'turn.failed'})); process.exit(1); }
   console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:control.nativeText ?? JSON.stringify({findings:control.nativeFindings || []})}}));
+  if (control.reconnect) console.log(JSON.stringify({type:'error',message:'Reconnecting... 1/5 (stream disconnected before completion)'}));
   console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:2,output_tokens:1}}));
   process.exit(0);
 }
@@ -116,6 +124,7 @@ if (reviewerSchema) {
     console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'Get-Content "' + target + '"',status:'completed',exit_code:0,aggregated_output:fs.readFileSync(target,'utf8')}}));
   }
   if (control.invalid) report.criteria.push(report.criteria[0]);
+  if (control.reconnect) console.log(JSON.stringify({ type: "error", message: "Reconnecting... 1/5 (stream disconnected before completion)" }));
   fs.writeFileSync(output, JSON.stringify(report));
   if (!control.noFinalMessage) console.log(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: control.forge ? JSON.stringify({ criteria: [], risks: ["different message"] }) : JSON.stringify(report) } }));
   console.log(JSON.stringify({ type: "turn.completed", usage: { input_tokens: 7, output_tokens: 3 } }));
@@ -135,6 +144,10 @@ if (!runsControl.noThread) console.log(
     thread_id: "11111111-2222-3333-4444-555555555555",
   }),
 );
+// Like the real CLI: a configured tier the model does not advertise is dropped with an item notice.
+const requestedTier = args.find(a => a.startsWith("service_tier="))?.slice(13).replace(/^"|"$/g, "");
+if (requestedTier && (process.env.CODEX_TEAM_FAKE_UNADVERTISED || "").split(",").includes(requestedTier))
+  console.log(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "error", message: "Configured service tier `" + requestedTier + "` is not advertised as supported for model `gpt-test` and will be omitted from requests." } }));
 if (process.env.CODEX_TEAM_FAKE_RECOVERY) {
   const file = process.env.CODEX_TEAM_FAKE_RECOVERY;
   const control = JSON.parse(fs.readFileSync(file, "utf8"));

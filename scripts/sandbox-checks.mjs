@@ -5,6 +5,7 @@ import {stateRoot,jobDirectory} from "./state-reader.mjs";
 import {hash,changes} from "./git.mjs";
 import {inside} from "./check-executable.mjs";
 import {checkEnvironment,shellEnvironmentPolicy,inlineCommand} from "./host-security.mjs";
+import {toolchainPassEnv} from "./toolchain-env.mjs";
 export const verificationCommands = state => state.checkPlan?.checks || state.assignment?.verification || [];
 export function reviewFingerprint(state,content=state.verifiedFingerprint || state.implementationFingerprint || state.baseline?.fingerprint) {
   return hash(JSON.stringify({content,hiddenChanges:state.hiddenChanges||null,gitConfigChanged:state.gitConfigChanged||null,verification:verificationCommands(state)}));
@@ -27,8 +28,10 @@ export function requireHostAck(state,acknowledgment,content) {
   error.reviewFingerprint=details.fingerprint;error.changedPaths=details.paths;throw error;
 }
 export function checkInvocation(state,check,binary) {
-  const env=checkEnvironment(process.env,check.passEnv);
-  if(check.host===true) return {command:check.command,args:check.args||[],env,executedIn:"host",advisory:inlineCommand([check.command,...(check.args||[])])?"Inline code: inspect before authorizing host execution.":null};
+  // cargo/rustc/rustup checks also receive the host's CARGO_HOME/RUSTUP_HOME (paths, not secrets).
+  const autoPassEnv=toolchainPassEnv(check.command,check.passEnv||[]), passEnv=[...(check.passEnv||[]),...autoPassEnv];
+  const env=checkEnvironment(process.env,passEnv);
+  if(check.host===true) return {command:check.command,args:check.args||[],env,executedIn:"host",autoPassEnv,advisory:inlineCommand([check.command,...(check.args||[])])?"Inline code: inspect before authorizing host execution.":null};
   // The launcher needs its runtime home. Its child command gets only the shell policy.
   if(process.env.CODEX_HOME) env.CODEX_HOME=process.env.CODEX_HOME;
   if(!binary?.command || !path.isAbsolute(binary.command)) throw Error("A pinned Codex launcher is required for sandboxed checks.");
@@ -40,7 +43,7 @@ export function checkInvocation(state,check,binary) {
   const temp=fs.mkdtempSync(path.join(artifactRoot,"check-temp-"));
   for(const key of Object.keys(env)) if(["TEMP","TMP","TMPDIR"].includes(key.toUpperCase())) delete env[key];
   Object.assign(env,{TEMP:temp,TMP:temp,TMPDIR:temp});
-  return {command:binary.command,args:[...(binary.prefix || []),"sandbox","-c",'sandbox_mode="workspace-write"',"-c","sandbox_workspace_write.network_access=false","-c","sandbox_workspace_write.exclude_tmpdir_env_var=true","-c","sandbox_workspace_write.exclude_slash_tmp=true","-c","sandbox_workspace_write.writable_roots="+JSON.stringify([temp.replaceAll("\\","/")]),...shellEnvironmentPolicy(check.passEnv),"--",check.command,...(check.args||[])],env,executedIn:"sandbox",tempDirectory:temp,cleanup:()=>fs.rmSync(temp,{recursive:true,force:true})};
+  return {command:binary.command,args:[...(binary.prefix || []),"sandbox","-c",'sandbox_mode="workspace-write"',"-c","sandbox_workspace_write.network_access=false","-c","sandbox_workspace_write.exclude_tmpdir_env_var=true","-c","sandbox_workspace_write.exclude_slash_tmp=true","-c","sandbox_workspace_write.writable_roots="+JSON.stringify([temp.replaceAll("\\","/")]),...shellEnvironmentPolicy(passEnv),"--",check.command,...(check.args||[])],env,executedIn:"sandbox",autoPassEnv,tempDirectory:temp,cleanup:()=>fs.rmSync(temp,{recursive:true,force:true})};
 }
 export function sandboxLimitation(text,cwd) {
   if(/CreateProcessAsUserW|(?:taskkill|WMI|Win32_Process)[\s\S]{0,400}(?:Access (?:is )?denied|EPERM|EACCES)/i.test(text)) return true;

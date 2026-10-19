@@ -31,6 +31,9 @@ const realSandboxLauncher = (() => {
   try { return { binary: R.resolveCodex() }; }
   catch (error) { return { error }; }
 })();
+// The real probe needs the host's Codex home: a fresh one selects the CLI's default
+// sandbox mode without its per-folder setup, and workspace writes fail there.
+const realCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 const lifecycle = fixture("security");
 test("host checks scrub secrets case insensitively and honor explicit passEnv", () => {
   const names = ["TOKEN", "mySecret", "PASSWORD", "PASSWD", "CREDENTIAL", "API_KEY", "APIKEY", "ACCESS_KEY", "PRIVATE_KEY", "AUTH", "COOKIE", "SESSION", "OPENAI_TEST", "ANTHROPIC_TEST", "AZURE_TEST", "AWS_TEST", "GH_TEST", "GITHUB_TEST", "NPM_TOKEN", "npm_config__authToken"];
@@ -364,7 +367,12 @@ test("real installed sandbox contains writes and environment", { skip: process.e
   const launcher = [binary.command, ...(binary.prefix || [])].join(" ");
   assert.equal(versionRun.status, 0, `${launcher}: ${version}; ${versionRun.error?.message || ""}`);
   t.diagnostic(`Real sandbox launcher: ${launcher}; version: ${version}`);
-  const result = sandboxProbe(binary, lifecycle.project());
+  const previousHome = process.env.CODEX_HOME;
+  process.env.CODEX_HOME = realCodexHome;
+  let result;
+  try { result = sandboxProbe(binary, lifecycle.project()); }
+  finally { process.env.CODEX_HOME = previousHome; }
+  t.diagnostic(`Network guard env: ${(result.networkGuard || []).join(", ") || "none (elevated sandbox)"}`);
   assert.equal(result.status, "passed", `${version} (${launcher}): ${JSON.stringify(result)}`);
 });
 test("Git fsmonitor, hooks and clean filter programs never execute in plugin snapshots",()=>{

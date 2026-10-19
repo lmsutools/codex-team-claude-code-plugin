@@ -18,6 +18,7 @@ import path from "node:path";
 import os from "node:os";
 import { stateRoot } from "./state-reader.mjs";
 import { projectJobs, attributedJobs, readBounded } from "./observer.mjs";
+import { tierShort } from "./service-tier.mjs";
 import { jobExecs, readExecUsage } from "./rollout-usage.mjs";
 import { classifySourcePath, recentCodex } from "./delegation-policy.mjs";
 import { contextAdvice } from "./context-advisor.mjs";
@@ -164,7 +165,7 @@ const RUNNING = new Set(["starting", "running", "verifying"]);
  */
 export function summarize({ transcript, subagents = [], jobs = [], rolloutOptions = {}, cwd, scratchpad, home }) {
   const lead = { session: emptyUsage(), reply: emptyUsage() };
-  const contributor = { session: emptyUsage(), reply: emptyUsage(), sessionJobs: 0, running: 0 };
+  const contributor = { session: emptyUsage(), reply: emptyUsage(), sessionJobs: 0, running: 0, tiers: [] };
   const replyStart = Date.parse(transcript.replyStartAt || transcript.firstAt || "") || 0;
   const prices = [], taskPrices = [], windows = [];
   const code={lead:{files:0,added:0,removed:0,unknownFiles:0},contributor:{files:0,added:0,removed:0,unknownFiles:0}};
@@ -218,6 +219,8 @@ export function summarize({ transcript, subagents = [], jobs = [], rolloutOption
       add(contributor.session,usage);
       const inTask=!exec.finishedAt || Date.parse(exec.finishedAt)>=replyStart;
       if(inTask)add(contributor.reply,usage);
+      const tier=inTask ? tierShort(job) : null;
+      if(tier && !contributor.tiers.includes(tier) && contributor.tiers.length<3)contributor.tiers.push(tier);
       const entry={provider:"openai",role:"contributor",model:sample.model,usage};
       prices.push(entry);if(inTask)taskPrices.push(entry);
       if(sample.rateLimits)windows.push({...sample.rateLimits,sampledAt:sample.sampledAt});
@@ -285,7 +288,7 @@ export function render(summary) {
     `│ Code: Codex ${linesFor(code.contributor)} · lead ${linesFor(code.lead)}`,
     dollars ? `│ Cost: lead $${cost.lead.total.toFixed(4)} · Codex $${cost.contributor.total.toFixed(4)} (user prices)` :
       `│ Consumption: lead ${formatTokens(all(l))} · Codex ${formatTokens(all(c))} tokens (price gap; no dollar total)`,
-    `│ Re-reads: lead ${formatTokens(l.cached)} · Codex ${formatTokens(c.cached)}`,
+    `│ Re-reads: lead ${formatTokens(l.cached)} · Codex ${formatTokens(c.cached)}${contributor.tiers?.length ? ` · Codex tier ${contributor.tiers.join(", ")}` : ""}`,
     `│ Session: output lead ${formatTokens(ls.output)} (${formatShare(ls.output,ls.output+cs.output)}) · Codex ${formatTokens(cs.output)} (${formatShare(cs.output,ls.output+cs.output)}); consumption ${formatTokens(all(ls))} / ${formatTokens(all(cs))}`,
     `│ Lead shell edits are not visible; ? = unknown lines/files.${contributor.running ? ` ${contributor.running} Codex running.` : !contributor.sessionJobs ? " No Codex jobs." : ""}`,
   ];

@@ -72,7 +72,7 @@ export async function runNativeReview(state, current, { runProcess, buildArgs, r
     const nativeState = { ...state, readOnly: true, threadId: null, execRole: 'reviewer', reviewRunId: 'native', execAttempt: reviewAttempt(state,4) };
     E.assertBudget(nativeState);
     const binary = resolveCodex(), args = nativeArgs(state, buildArgs);
-    let final = null, completed = false, failed = false, threadId = null;
+    let final = null, completed = false, failed = false, reconnecting = false, threadId = null;
     const usageEvents = [];
     assertReviewInstructions(state);
     const outcome = await runProcess(nativeState, binary.command, [...binary.prefix, ...args], {
@@ -81,8 +81,11 @@ export async function runNativeReview(state, current, { runProcess, buildArgs, r
         if (event.type === 'item.completed' && event.item?.type === 'agent_message') final = event.item.text;
         if (event.item?.type === 'exitedReviewMode') final = event.item.review;
         if (event.type === 'thread.started') threadId = event.thread_id;
-        if (event.type === 'turn.completed') { completed = true; usageEvents.push(event); }
-        if (event.type === 'turn.failed' || event.type === 'error') failed = true;
+        if (event.type === 'turn.started') reconnecting = false;
+        if (event.type === 'turn.completed') { completed = true; reconnecting = false; usageEvents.push(event); }
+        // Recovered reconnect notices precede a completed turn; only an unrecovered error fails.
+        if (event.type === 'turn.failed') failed = true;
+        if (event.type === 'error') reconnecting = true;
       },
     });
     for (const [index,event] of usageEvents.entries()) {
@@ -91,7 +94,7 @@ export async function runNativeReview(state, current, { runProcess, buildArgs, r
     }
     if (outcome.authFailure) throw Object.assign(Error('Native review authentication failure: ' + outcome.authFailure),{code:'auth_expired'});
     if (outcome.durationMs > timeoutSeconds * 1000) throw Error('Native review failed: timed_out');
-    if (outcome.stopReason || outcome.parseError || outcome.secretCount || outcome.code !== 0 || failed || !completed) throw Error('Native review failed: ' + (outcome.stopReason || outcome.parseError || (outcome.secretCount ? 'forbidden output' : 'exit/completion failure')));
+    if (outcome.stopReason || outcome.parseError || outcome.secretCount || outcome.code !== 0 || failed || reconnecting || !completed) throw Error('Native review failed: ' + (outcome.stopReason || outcome.parseError || (outcome.secretCount ? 'forbidden output' : 'exit/completion failure')));
     if (typeof final !== 'string' || final.length > 1024 * 1024 || PC.scan(final,state.profile).count) throw Error('Native review missing or unsafe final output.');
     const {findings,droppedNativeFindings} = parseNativeReview(final, state);
     if (PC.inspectValue(findings,state.profile).count) throw Error('Native review forbidden content.');

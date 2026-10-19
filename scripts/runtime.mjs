@@ -9,6 +9,8 @@ import { sandboxProbe } from "./sandbox-probe.mjs";
 import { inspectVerificationRequest,orderedChecks } from "./verification-request.mjs";
 import {observeWithRetry} from "./background-facts.mjs";
 import {verificationOutcome} from "./verification-outcome.mjs";
+import {toolchainPassEnv, toolchainHint, workerToolchainEnv, toolchainSummary} from "./toolchain-env.mjs";
+import {validateTier, assertTierSupported, configuredTier, configuredModel, catalogAdvice, omittedTier, effectiveTier} from "./service-tier.mjs";
 import { reviewOptions, findingDispositions, findingPacketBinding } from './review-findings.mjs';
 import { instructionSnapshot, assertReviewInstructions } from './review-instructions.mjs';
 import { scoutEvidenceFloor, scoutThreadEvents } from './review-evidence.mjs';
@@ -219,6 +221,7 @@ export function doctor(input = {}) {
       : { status: "untested", probeExecuted: false, networkIsolation: "unconfirmed" },
     diagnostics,
     hint: D.versionHint(runtime.version, {check, failure:job?.runtimeFailure}),
+    toolchain: toolchainSummary(),
     ...(job ? { job: summary(job) } : {}),
     recovery: D.recovery(cwd, input.jobId, diagnostics),
   };
@@ -261,8 +264,9 @@ export function buildArgs(state, report) {
   if (state.model) args.push("--model", state.model);
   if (state.effort)
     args.push("-c", "model_reasoning_effort=" + JSON.stringify(state.effort));
+  if (state.serviceTier) args.push("-c", "service_tier=" + JSON.stringify(state.serviceTier));
   for (const override of state.configOverrides || []) args.push("-c", override);
-  args.push(...shellEnvironmentPolicy(state.profile?.passEnv || []));
+  args.push(...shellEnvironmentPolicy([...new Set([...(state.profile?.passEnv || []), ...workerToolchainEnv()])]));
   if (state.threadId) args.push("resume", state.threadId);
   if (state.assignment || isScout(state))
     args.push("--output-schema", artifact(state.jobId, "report-schema.json"));
@@ -296,6 +300,7 @@ function normalize(input, previous) {
     "confirmDraftHash",
     "autoVerify",
     "review",
+    "serviceTier",
   ]);
   if (input.readOnly !== undefined && typeof input.readOnly !== "boolean")
     throw new Error("readOnly must be a boolean.");
@@ -355,6 +360,7 @@ function normalize(input, previous) {
     )
   )
     throw new Error("Invalid reasoning effort.");
+  const serviceTier = validateTier(input.serviceTier ?? previous?.serviceTier ?? null);
   const timing = timeoutChoice(mode === "scout" ? "scout" : previous ? "revision" : "implementation", input.timeoutSeconds ?? (previous ? previous.timeoutSeconds ?? 1800 : undefined));
   return {
     assignment: task,
@@ -370,6 +376,7 @@ function normalize(input, previous) {
     workerProfile,
     model,
     effort,
+    ...(serviceTier ? { serviceTier } : {}),
     ...timing,
     salvageSeconds: input.salvageSeconds === undefined ? previous?.salvageSeconds : C.integer(input.salvageSeconds, "salvageSeconds", 0, 300),
     timeoutSeconds: C.integer(
@@ -469,6 +476,11 @@ function planStart(input, cwd) {
     ? withHistoricalDiagnosis(S.recover(S.scoped(input.resumeJobId, cwd)))
     : null;
   const options = normalize(input, previous);
+  // An explicit tier must be one the selected CLI can honor; an inherited one is reported as configured.
+  if (options.serviceTier) assertTierSupported(options.serviceTier, resolveCodex());
+  else { const inherited = configuredTier(cwd); if (inherited) options.serviceTierInherited = inherited; }
+  const tierAdvice = catalogAdvice(options.serviceTier || options.serviceTierInherited?.tier, configuredModel({ ...options, cwd }));
+  if (tierAdvice) options.serviceTierAdvice = tierAdvice;
   if (resolved.provenance || previous?.provenance) options.provenance = resolved.provenance || previous.provenance;
   if (options.provenance?.draftSourced || options.provenance?.draftCheckOverlap) options.autoVerify = false;
   const profile = P.loadProfile(cwd, {
@@ -512,6 +524,8 @@ function planStart(input, cwd) {
   delete identityOptions.autoVerifyExplicit;
   delete identityOptions.timeoutBasis;
   delete identityOptions.typicalDurationSeconds;
+  delete identityOptions.serviceTierInherited;
+  delete identityOptions.serviceTierAdvice;
   if (input.timeoutSeconds === undefined) delete identityOptions.timeoutSeconds;
   const defaultAutoVerify = !previous && !!options.assignment && !options.readOnly && !options.provenance?.draftSourced && !options.provenance?.draftCheckOverlap && !options.assignment.verification.some(c=>c.host);
   if (options.autoVerify === defaultAutoVerify) delete identityOptions.autoVerify;
@@ -881,6 +895,7 @@ function summary(state) {
   const command = waitCommand(state.jobId);
   return {
     ...rest,
+    ...(state.serviceTier || state.serviceTierInherited ? { effectiveServiceTier: effectiveTier(state) } : {}),
     ...runObservation(state),
     ...(handbookAtStart ? { handbookAtStart: H.metadata(handbookAtStart) } : {}),
     ...(state.result?.draftAssignment ? { draftHash: draftHash(state.result.draftAssignment) } : {}),
@@ -891,12 +906,24 @@ function summary(state) {
         : "Wait command unavailable for this path; poll codex_status with waitSeconds=20."
       : state.status === "implementation_finished"
         ? state.mode === "scout" ? SCOUT_NEXT : "Inspect changes, then codex_verify and codex_review."
+        : state.status === "accepted" && !state.delivery?.implementationCommit && state.mode !== "scout"
+          ? commitNext(state)
         : state.runtimeFailure?.kind === "auth_expired"
           ? "Run codex login, then explicitly resume the saved thread."
         : state.status === "blocked_runtime"
           ? "Runtime failure; do not create another coding or read-only test job. Use codex_doctor with this cwd/jobId. After repair and a successful probe, resume with a new requestId; the saved assignment is retained."
           : undefined,
   };
+}
+/**
+ * Codex never commits: Git metadata is read-only in its sandbox, and in linked
+ * worktrees the index lives in the main repository's .git/worktrees/<name>,
+ * outside the writable workspace. The lead commits accepted work.
+ */
+function commitNext(state) {
+  if (PC.enabled(state.profile, "branchMode")) return "Accepted. codex_integrate commits the accepted paths on the owned branch.";
+  if (state.isolation === "worktree" && !state.integration) return "Accepted. codex_integrate copies the reviewed files into the project; then commit them yourself (Codex never commits).";
+  return "Accepted. Codex never commits (Git metadata is read-only in its sandbox): commit the accepted files yourself with git add -- <files> and git commit.";
 }
 function withHistoricalDiagnosis(state) {
   if (
@@ -2009,8 +2036,12 @@ async function worker(jobId, verification = false) {
             coverageError = e.message;
           }
         const sandboxLimited = !spec.host && result.code !== 0 && sandboxLimitation(tail(stdoutPath) + "\n" + tail(stderrPath), state.executionCwd);
+        const autoPassEnv = toolchainPassEnv(spec.command, spec.passEnv || []);
+        const cargoHint = result.code !== 0 ? toolchainHint({ ...spec, autoPassEnv }, tail(stdoutPath) + "\n" + tail(stderrPath)) : null;
         checks.push({
           ...spec,
+          ...(autoPassEnv.length ? { autoPassEnv } : {}),
+          ...(cargoHint ? { toolchainHint: cargoHint } : {}),
           executedIn: spec.host ? "host" : "sandbox",
           ...(spec.host && inlineCommand([spec.command,...spec.args]) ? {advisory:"Inline code: host execution was acknowledged by the lead."} : {}),
           ...(sandboxLimited ? { sandboxLimited: true, hint: "Review the diff and re-run an explicit host check with hostAck." } : {}),
@@ -2205,6 +2236,8 @@ async function worker(jobId, verification = false) {
             runtimeFailure = D.failureRecord(diagnostic, { cwd: state.cwd, source: diagnosticSource });
           if (event.type === "thread.started")
             noteThreadStarted(jobId, event.thread_id, progress);
+          const droppedTier = omittedTier(event);
+          if (droppedTier) progress.note({ serviceTierOmitted: { ...droppedTier, at: S.now() } }, true);
           if (event.type === "turn.completed") {
             turnCompleted = true;
             progress.note({ usage: event.usage }, true);

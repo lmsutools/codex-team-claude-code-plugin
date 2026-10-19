@@ -26,7 +26,8 @@ export async function salvageRun(state, { runProcess, buildArgs, binary, reportP
     result = await runProcess(finalState,binary.command,[...binary.prefix,...args],{
       input:(state.mode === "scout" ? "DEADLINE FINALIZE: Return the scout brief with files citing existing file line ranges already read in this thread. " : "DEADLINE FINALIZE: ") + " No tools. Return the final JSON report now. Mark all unfinished or unverified work explicitly; checks are claims, not verification. Do not edit any project file. This is the sole read-only finalize turn.\n",
       eventsFile,errorFile,stopRequested: () => usedTool ? "failed" : null,timeoutSeconds:Math.max(0,(Date.parse(until)-Date.now())/1000),onEvent: event => {
-        if (event.item && !["agent_message", "reasoning", "todo_list"].includes(event.item.type)) usedTool = true;
+        // CLI notices arrive as item.type "error" (for example an omitted service tier); they are not tool use.
+        if (event.item && !["agent_message", "reasoning", "todo_list", "error"].includes(event.item.type)) usedTool = true;
         if (event.type === "turn.started") { completed = false; failed = false; }
         if (event.type === "turn.completed") completed = true;
         if (event.type === "turn.failed") failed = true;
