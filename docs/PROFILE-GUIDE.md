@@ -18,6 +18,8 @@ codex_start retains structured assignments and stable requestId. New optional fi
 
 Profile checks are combined with assignment checks. includeProfileChecks=false cannot omit enforce checks. Commands are argv arrays with variable expansion and no implicit shell. A files variable occupying a complete argument expands to several arguments. Reserved variables cannot be overridden.
 
+Checks see only core OS variables plus their passEnv names. Since 1.2.2, checks that run cargo, rustc or rustup directly also receive the host's CARGO_HOME and RUSTUP_HOME (recorded as autoPassEnv); list them in passEnv, or in the profile's passEnv, when cargo runs through a wrapper such as cmd /c or an npm script.
+
 repoRoot is the job's policy checkout; worktree is its execution checkout. A batch child has its own policy checkout. Shared tools stored in ignored directories must therefore use an approved absolute path, for example through a profile variable. Child worktrees do not inherit ignored toolchain installations.
 
 Affected tests are selected by changed tests, explicit name maps and a bounded relative-import graph. Dynamic/unknown dependencies conservatively include the affected test. Exceeding the scan bound fails with a diagnostic. Per-file processes remain isolated. A genuine timeout gets at most one isolated retry; failed assertions do not.

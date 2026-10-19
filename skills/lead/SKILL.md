@@ -215,3 +215,23 @@ All scout-seeded jobs default `autoVerify:false` with reason `Scout-seeded job: 
 Command-file fallbacks resolve job prefixes with read-only project-scoped `codex_status` (`detail:"full"`, no jobId), then use the exact unique full ID. Show candidates for missing, unknown or ambiguous prefixes; never cancel an ambiguous match. Capped/truncated listings require a full ID. Full UUIDs remain usable directly; arguments never enter shell lines.
 
 <!-- END CODEX-TEAM 1.2.1 FOOTER AND ATTRIBUTION -->
+
+<!-- BEGIN CODEX-TEAM 1.2.2 LATEST CLI AND SERVICE TIERS -->
+## 1.2.2: latest CLI, service tiers and load resilience
+
+**Service tier.** `codex_start` accepts `serviceTier: "default" | "fast" | "priority" | "ultrafast"`, passed as `-c service_tier=<tier>`; omit it to inherit the CLI configuration. Use it only when the owner chose a tier. Revisions, reviewers and deadline finalize inherit it. An explicit tier is validated against the selected CLI's `codex features list` (`fast`/`priority` need `fast_mode`, `ultrafast` needs `ultrafast_mode`); a refusal names the CLI, so select another CLI rather than retrying. Status, waiter packets and the footer show the effective tier. The CLI silently drops a tier that the model does not advertise and runs at the default tier; the plugin records this as `serviceTierOmitted` and shows `default (ultrafast omitted ...)`. Start output adds `serviceTierAdvice` from Codex's cached model catalog. Report an omitted tier to the owner instead of claiming it ran.
+
+**First-run sandbox setup.** The preflight before the first model call gives a folder this runtime never set up a 180 s bound (60 s when warm) and retries one timeout. It names a runtime file held by another process (os error 32, often the Codex desktop app). `sandbox_spawn_timeout` ("timed out ... waiting for runner spawn_ready") is a transient load symptom. It is never cached as project health. When it stops the worker, the supervisor resumes the same thread once after a fresh preflight, and a sandboxed check whose runner never started runs once more. Other setup failures still block until `codex_doctor probe=true` passes; do not probe in a loop.
+
+**Verification under load.** Post-check observation (content hash, hidden listing, Git configuration) is bounded by at least 180 s or 8× the measured snapshot cost and is retried once. `verification.status: "observer_timeout"` means that the checks ran but the observation did not finish. It is not a check failure: run `codex_verify` again when load drops, and do not edit checks or criteria to get past it. Any abnormal end now leaves a terminal verification status (`observer_timeout`, `error` or `cancelled`), never `running`.
+
+**Waiting.** Status strings are never shortened. A waiter started on a finished job returns `alreadyFinished: true` with a `waiterNote`: inspect the job with `codex_status` and do not re-arm the waiter. The recovery card lists wait commands only for live jobs.
+
+**Git configuration.** `gitConfigChanged` ignores Codex-injected `GIT_CONFIG_*` environment and `branch.<name>.remote/merge/...` tracking entries, which sibling worktrees write to the shared common config. It reports them under `ignored`. Remote URLs, filters, hooks, includes and core settings still count, and `sharedGitDirectory: true` warns that another worktree may have made the change.
+
+**Commits.** Codex never commits. Git metadata is read-only in its sandbox, and in a linked worktree the index lives in the main repository's `.git/worktrees/<name>`, outside the workspace. A commit would also need the shared objects, refs, hooks and config, so the plugin does not make the gitdir writable. After acceptance, commit the accepted files yourself (`git add -- <exact files>`, then `git commit`). Use `codex_integrate` for worktree jobs and branch mode, where it creates the commit. A missing commit is not a worker blocker.
+
+**Rust checks.** Checks that run `cargo`, `rustc` or `rustup` directly receive the host's `CARGO_HOME` and `RUSTUP_HOME` (recorded as `autoPassEnv`), and so does Codex's shell. Wrapped commands (`cmd /c`, npm scripts) still need `passEnv: ["CARGO_HOME","RUSTUP_HOME"]`. A failed check whose output shows cargo missing its registry or toolchain carries a `toolchainHint`. The network-off sandbox needs pre-fetched dependencies (`cargo fetch` on the host) and `--offline` or `--frozen`.
+
+**CLI selection.** `node scripts/cli-compat.mjs <absolute codex.exe or codex.js>` checks, without model calls, every flag the plugin passes and which tiers the CLI supports. Pin a CLI through `CODEX_TEAM_CODEX` only after it reports compatible and a `codex_doctor probe=true` passes.
+<!-- END CODEX-TEAM 1.2.2 LATEST CLI AND SERVICE TIERS -->

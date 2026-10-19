@@ -6,7 +6,8 @@
 ![Node 24+](https://img.shields.io/badge/node-%E2%89%A524-339933)
 ![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-D97757)
 ![npm dependencies: 0](https://img.shields.io/badge/npm%20dependencies-0-brightgreen)
-![Tests: 400+](https://img.shields.io/badge/tests-400%2B-brightgreen)
+![Tests: 450+](https://img.shields.io/badge/tests-450%2B-brightgreen)
+![Codex CLI 0.163](https://img.shields.io/badge/Codex%20CLI-0.163-412991)
 
 Codex Team turns [Claude Code](https://code.claude.com/docs) into a tech lead that delegates implementation to the [OpenAI Codex CLI](https://github.com/openai/codex). Claude turns your request into a structured assignment, and Codex writes the code and tests in its sandbox. The plugin then verifies, reviews and records every step independently before Claude is allowed to accept the work.
 
@@ -25,6 +26,7 @@ Claude's context stays on design, review and judgment, and Codex does the typing
 - **Parallel workers.** Isolated child worktrees with disjoint scopes are integrated one at a time. Integration stops at the first conflict, and the combined result is verified again.
 - **Built for long, messy sessions.** A shared crash-safe job database serves every session on the machine. The plugin retries transient failures, salvages work at the deadline, learns timeouts from past runs, and restores Claude's working state after `/compact` or `/clear`.
 - **Honest accounting.** After each task, a footer shows who wrote the output, who authored the code, what it consumed and (with your prices) what it cost.
+- **Service tiers.** Ask for `fast`, `priority` or `ultrafast` per job. The plugin validates the tier against the selected CLI and shows the tier that actually ran, including when Codex drops one the model does not offer.
 - **Zero runtime dependencies.** Plain Node.js 24 with its built-in SQLite: about 12,000 lines of code and 400+ tests that run against a fake Codex, with no model usage.
 
 ## How a job flows
@@ -149,6 +151,21 @@ After each task, a Stop hook prints the split between Claude (the lead) and Code
 - It detects project folders owned by an account from a previous Windows installation and prints the exact administrator `takeown` command. It never runs that command itself.
 - A failed sandbox marks the job `blocked_runtime` and stops further model calls in that project until a probe passes.
 
+### Codex CLI versions and service tiers
+
+- **Latest CLI.** Tested against Codex CLI 0.163.0 and 0.153.2, and compatibility-checked on 0.162.1. `node scripts/cli-compat.mjs <absolute codex.exe or codex.js>` checks, without model calls, every flag the plugin passes and which tiers the CLI supports. Pin a CLI with `CODEX_TEAM_CODEX`.
+- **`serviceTier`** on `codex_start`: `default`, `fast`, `priority` or `ultrafast`, passed as `-c service_tier=<tier>`; omitted means your `config.toml` decides. `ultrafast` needs a CLI with the `ultrafast_mode` feature (0.162 or later).
+- **Effective tier.** Status, waiter packets and the footer show the tier that ran. Codex silently drops a tier that the model's catalog does not advertise; the plugin records that and shows `default (ultrafast omitted ...)`.
+
+### Under load and in linked worktrees
+
+- **First-run sandbox setup.** A folder the runtime has never set up gets a long preflight (180 s, 60 s once warm) and one retry before the first model call. Codex itself waits only 15 s for its sandbox runner. A runner start timeout (`spawn_ready`) resumes the same thread once after a fresh preflight; it is never cached as a project block.
+- **Verification under load.** The post-check observation scales with the measured snapshot cost and retries once. If it still times out, the job says `observer_timeout`, keeps the check results, and explains that the checks did not fail.
+- **Git configuration.** Branch-tracking entries that sibling worktrees write to the shared `.git/config`, and Git configuration Codex injects through the environment, no longer count as a configuration change.
+- **Commits.** Codex never commits: its sandbox keeps Git metadata read-only, and a linked worktree's index lives outside the workspace. You (or `codex_integrate` in worktree and branch mode) commit accepted work.
+- **Rust.** Checks that run `cargo`, `rustc` or `rustup` get your `CARGO_HOME` and `RUSTUP_HOME` automatically; failures that look like a missing offline registry say what to pass.
+- **Line endings.** Worktree integration still works when Git converts line endings (`core.autocrlf`, the Git for Windows default), so a worktree's checkout no longer has to match your files byte for byte.
+
 ### Zero-token slash commands
 
 `/codex-team:status`, `/codex-team:result`, `/codex-team:cancel` and `/codex-team:stats` work out of the box. With the opt-in `UserPromptSubmit` hook, they answer **without a model turn**, at no token cost.
@@ -204,6 +221,8 @@ Everything works without configuration. Optional settings:
 | `CODEX_TEAM_TOKENS` | Footer: `long` (default), `always` or `off` |
 | `CODEX_TEAM_TOKENS_MIN_CALLS` | Minimum Claude calls before the footer appears (default 8) |
 | `CODEX_TEAM_DB_BUSY_MS` | How long a write waits for the shared database (default 60000) |
+| `CODEX_TEAM_PROBE_TIMEOUT_MS` | Bound for one sandbox preflight attempt (default 180000 for a new folder, 60000 once warm) |
+| `CODEX_TEAM_OBSERVATION_TIMEOUT_MS` | Bound for the post-check observation (default: at least 180000, or 8× the measured snapshot cost, at most 900000) |
 | `~/.claude/codex-team/prices.json` | Your per-million-token rates, to enable dollar totals |
 
 Plugins can't set Claude Code's status line or every hook themselves, so these stay opt-in: the **status line**, the **zero-token command hook** and an optional **large tool-output warning**. Copy the snippets from the [reference](docs/REFERENCE.md), using the install path that `claude plugin details codex-team` shows.
@@ -224,7 +243,13 @@ Job state, including prompts, reports and logs, lives under `~/.claude/codex-tea
 npm test
 ```
 
-The suite runs 29 test files and 400+ tests serially against a fake Codex executable, with no model usage, covering lifecycle, protocol, verification, recovery, worktrees, concurrency and security hardening. The full suite takes a while: several tests exercise real timeouts and recovery delays.
+The suite runs 30 test files and 450+ tests serially against a fake Codex executable, with no model usage, covering lifecycle, protocol, verification, recovery, worktrees, concurrency and security hardening. The full suite takes a while: several tests exercise real timeouts and recovery delays, and a few latency budgets assume an idle machine.
+
+Two opt-in tests check a real CLI without model calls; they use `CODEX_TEAM_CODEX` and your Codex home:
+
+```shell
+CODEX_TEAM_REAL_CLI=1 CODEX_TEAM_REAL_SANDBOX=1 CODEX_TEAM_CODEX=/absolute/path/to/codex.js npm test
+```
 
 | Path | Contents |
 | --- | --- |
@@ -234,6 +259,7 @@ The suite runs 29 test files and 400+ tests serially against a fake Codex execut
 | `commands/` | Slash-command fallbacks |
 | `schemas/`, `templates/`, `examples/` | Profile contract, built-in templates and an example |
 | `docs/` | [Reference](docs/REFERENCE.md) (detailed behavior by release) and [profile guide](docs/PROFILE-GUIDE.md) |
+| `CHANGELOG.md` | [Release notes](CHANGELOG.md) |
 
 ## License
 

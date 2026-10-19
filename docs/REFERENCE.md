@@ -1,6 +1,71 @@
-# Codex Team reference (1.2.1)
+# Codex Team reference (1.2.2)
 
-Detailed behavior, limits and settings, organized by release. For an overview and installation, see the [README](../README.md).
+Detailed behavior, limits and settings, organized by release. For an overview and installation, see the [README](../README.md). Release notes are in the [changelog](../CHANGELOG.md).
+
+## 1.2.2: latest CLI, service tiers and load resilience
+
+### Codex CLI selection and compatibility
+
+The plugin runs `codex exec` (with `--cd`, `--sandbox`, `-c`, `--model`, `--output-schema`, `--json`, `--output-last-message`), `codex exec resume`, `codex exec review --uncommitted` and `codex sandbox` (with `--permission-profile`, `--include-managed-config` and `-C` for the preflight, and `-c` overrides for checks). `node scripts/cli-compat.mjs [absolute codex.exe or codex.js] [--json]` checks each of these help surfaces and `codex features list` without a model call, and exits nonzero when a flag is missing. On 2026-10-18, 0.153.2, 0.162.1 and 0.163.0 were all compatible. In 0.162 and later, `codex sandbox -C <dir>` also requires `--permission-profile`; check invocations do not pass `-C`.
+
+On that machine the PATH CLI 0.162.1 could not set up its sandbox: its setup refresh tried to update a runtime DLL under `%LOCALAPPDATA%\OpenAI\Codex\runtimes` that the running Codex desktop app held (os error 32). 0.163.0 and 0.153.2 set up the same folders. Run `codex_doctor probe=true` before pinning any CLI.
+
+### Service tiers
+
+`codex_start` accepts `serviceTier`: `default`, `fast`, `priority` or `ultrafast`. It is passed as `-c service_tier=<tier>` to implementation, revision, reviewer, native-review and deadline-finalize execs. Omitted, the CLI configuration decides. The plugin records the inherited tier from the top-level `service_tier` of the closest project `.codex/config.toml`, or else `$CODEX_HOME/config.toml`, and does not pass it again. Revisions inherit an explicit tier. Requests without a tier keep their 1.2.1 identity.
+
+An explicit tier other than `default` is validated against `codex features list` of the selected CLI: `fast` and `priority` need `fast_mode`, and `ultrafast` needs `ultrafast_mode`. A missing or disabled feature, or a CLI without a feature list, is refused with the CLI's version and path.
+
+`service_tier` is free-form when the CLI loads its configuration. When a request starts, the CLI drops a tier that the model's catalog does not advertise and emits an item notice ("Configured service tier `ultrafast` is not advertised as supported for model `gpt-6-astra` and will be omitted from requests"). The worker records that notice as `serviceTierOmitted`. `effectiveServiceTier` (full status) and the compact `serviceTier` label then report the default tier. Start output adds `serviceTierAdvice` when Codex's cached `models_cache.json` does not list the tier for the model. That advice can be stale; the run itself confirms the tier. The Stop footer appends `Codex tier <label>` to its re-reads line. On 2026-10-18 the catalog advertised only `priority` ("Fast", 2x speed) for `gpt-6-astra`, so `ultrafast` was omitted on 0.153.2 and 0.163.0 alike.
+
+### First-run sandbox setup and runner start timeouts
+
+Codex's Windows sandbox sets up each new folder: write and read ACLs, and protection for `.git`, `.git/worktrees/<name>` and `.codex`. Under load this took about 48 s for a large repository. Codex itself waits 15 s for its runner (`spawn_ready`), and no setting changes that wait. The plugin therefore makes sure setup has finished before the first model call:
+
+- The preflight (`codex sandbox --permission-profile :workspace`, which runs a nonce print and no model) uses a 180 s bound per attempt for a folder that this runtime has not set up, and 60 s for a warm folder. `CODEX_TEAM_PROBE_TIMEOUT_MS` sets the bound, from 1 s to 10 min.
+- A probe that times out, whose runner reports `spawn_ready`, or whose setup log shows a held runtime file is retried once. The setup helper keeps running after a timed-out probe, and a held file is retried after a short pause.
+- Results record `firstRun`, `boundMs` and every attempt. A passed probe marks the folder warm for that runtime fingerprint.
+- `sandbox_spawn_timeout` is classified from Codex's own stderr router line or from the first line of a command error; source code or tool output that merely quotes it is not evidence. It is transient: it is never cached as project health, and the next job's preflight probes again. When it stopped the worker (reported, or the turn failed), the supervisor resumes the same thread once with the long preflight bound and a prompt to retry the failed tool call. A timeout that Codex recovered from is recorded as `sandboxSpawnTimeouts`.
+- A sandboxed check whose output shows that the runner never started runs once more (`sandboxRunnerStartTimeout` on the first attempt).
+- A runtime file held by another process during setup (`runtime_file_in_use`) gets a recovery step and a doctor hint naming the file.
+- Permission and ACL setup failures behave as before: they block the project until `codex_doctor probe=true` passes, and they are never replayed.
+
+### Verification under load
+
+Each verification measures the snapshot cost when it is prepared (`verification.observationCostMs`). The post-check observation (content hash, hidden-change listing, Git configuration), and the observation before each host check, are bounded by `max(180 s, 8 × cost)` up to 15 min. `CODEX_TEAM_OBSERVATION_TIMEOUT_MS` sets the bound from 1 s to 1 h. An observer timeout is retried once with a doubled bound, and `verification.observation.attempts` records both attempts.
+
+A persistent timeout ends the job as `verification_failed` with `verification.status: "observer_timeout"` and `verification.observerTimeout` (operation, attempts, passed and failed counts). The progress line says that the checks did not fail. Acceptance is refused with the same explanation; run `codex_verify` again. Other abnormal ends record `error` or `cancelled`. The waiter deadline covers the checks plus three observation bounds per observation.
+
+### Waiters and status
+
+Compact output never shortens `status`, `livePhase`, `jobId` or `waitCommand`. Before, `verification_failed` was halved to `verificat` and later to an empty string. A waiter whose first read finds the milestone already reached returns `alreadyFinished: true` and a `waiterNote`. The recovery card shows wait commands and live phases only for starting, running or verifying jobs.
+
+### Git configuration observations
+
+Effective configuration is compared from `git config --list --show-origin --includes -z`. The observer environment has no `GIT_*` names, and `command line:` entries (`-c`, `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`, `GIT_CONFIG_PARAMETERS`) are ignored. `branch.<name>.remote`, `pushremote`, `merge`, `rebase`, `description` and `vscode-merge-base` are compared separately: sibling worktrees write them to the shared common config, and no plugin Git operation reads them. A change limited to them appears under `gitConfigChanged.ignored`. All other keys count, including remote URLs, merge options, filters, includes, hooks and `core.*`. The common config file is parsed by Git, and an unparsable file keeps its raw digest. `sharedGitDirectory: true` and the heading say when the observed Git directory is shared with sibling worktrees. Snapshots recorded by 1.2.1 still compare by raw digests.
+
+### Commits
+
+Codex never commits. Its sandbox denies writes to `.git` and to `.git/worktrees/<name>`. A commit in a linked worktree also writes the shared objects, refs and index lock outside the workspace. Making that gitdir writable would expose the shared hooks and config that the host executes, so the plugin keeps it read-only. The worker prompt says this, and a missing commit is not a blocker. After acceptance, `next` says who commits: the lead with `git add -- <files>` and `git commit` for direct jobs, or `codex_integrate`, which copies worktree changes or creates the branch-mode commit.
+
+### Worktree integration and line endings
+
+Git for Windows enables `core.autocrlf` system-wide. In that setup, a fresh worktree checkout can differ byte-wise (CRLF) from the original's clean working files (LF, for example after a direct-mode Codex job was committed). `codex_integrate` used to compare the original against the worktree's baseline bytes and refused to integrate. It now compares the original with its own snapshot from job start, and still refuses when the original has changed since then. Integrated files carry the worktree checkout's line endings, and Git normalizes them on commit.
+
+### Scout briefs and read evidence
+
+The scout schema describes `files[].path` and `draftAssignment.scope` items as literal relative paths, and the scout prompt says the same; validation stays strict. The evidence floor now handles two more shapes:
+
+- **Quoted commands.** When the remaining command is a single argument, the tokenizer decodes it, including the POSIX quote concatenation that Codex uses to display embedded quotes.
+- **Variable arguments.** A reader's `$variable` argument resolves to string literals bound earlier in the same command (`$v = @('a','b')`, `$v = 'a'`, `foreach ($x in $v)`). Such a read counts only when the command output contains one of the file's first substantial lines.
+
+### Rust toolchain homes
+
+The sandbox has no network and passes only core OS names and `passEnv`. Rust installs outside `%USERPROFILE%\.cargo` therefore need `CARGO_HOME` and `RUSTUP_HOME` to find the offline registry and toolchain. Checks whose executable is `cargo`, `rustc`, `rustup`, `rustdoc`, `rustfmt`, `clippy-driver` or `cargo-*` receive those that are set on the host, recorded as `autoPassEnv`. Codex's shell policy includes them too. Wrapped commands such as `cmd /c cargo` or npm scripts still need explicit `passEnv`. A failed check whose output matches cargo or rustup registry and toolchain errors carries `toolchainHint`, and `codex_doctor` reports `toolchain` (set or unset, never values). Codex's default sandbox mode also sets `CARGO_NET_OFFLINE=true`; pre-fetch dependencies on the host with `cargo fetch`.
+
+### Containment probe and Codex's network guard
+
+In its default (non-elevated) Windows mode, Codex enforces network-off with sentinel environment: loopback `*_PROXY` values, `NO_PROXY` for loopback, `GIT_SSH_COMMAND=cmd /c exit 1`, an empty `GIT_ALLOW_PROTOCOLS`, `CARGO_NET_OFFLINE`, `NPM_CONFIG_OFFLINE`, `PIP_NO_INDEX`, `PIP_DISABLE_PIP_VERSION_CHECK` and `SBX_NONET_ACTIVE`. The doctor's containment probe accepts these names only when their values match the sentinels, and lists them as `networkGuard`. Any other value, such as a real proxy, still counts as unexpected; values are never reported. The elevated mode (`[windows] sandbox = "elevated"`) sets none of them.
 
 ## 1.1.6: less waiting context, visible progress
 

@@ -423,10 +423,12 @@ test("R5: CODEX_HOME is launcher-only, including explicit passEnv and implemente
 });
 
 
-test("R6/version: the lead skill appends the 1.2.1 footer contract",()=>{
- for(const file of ["../package.json","../.claude-plugin/plugin.json"])assert.equal(JSON.parse(fs.readFileSync(new URL(file,import.meta.url),"utf8")).version,"1.2.1");
+test("R6/version: the lead skill keeps the 1.2.1 footer contract",()=>{
+ // 1.2.2 appends its own section and pins the release version (tests/v122.test.mjs).
+ const versions=["../package.json","../.claude-plugin/plugin.json"].map(file=>JSON.parse(fs.readFileSync(new URL(file,import.meta.url),"utf8")).version);
+ assert.equal(versions[0],versions[1]);
  const skill=fs.readFileSync(new URL("../skills/lead/SKILL.md",import.meta.url),"utf8");
  assert.equal(skill.match(/^## 1\.2\.1: footer and attribution$/gm).length,1);
  assert.match(skill,/Token totals are not a work measure/);
- assert.ok(skill.trimEnd().endsWith("<!-- END CODEX-TEAM 1.2.1 FOOTER AND ATTRIBUTION -->"));
+ assert.equal(skill.match(/<!-- END CODEX-TEAM 1\.2\.1 FOOTER AND ATTRIBUTION -->/g).length,1);
 });

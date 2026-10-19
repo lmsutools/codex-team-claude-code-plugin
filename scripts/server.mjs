@@ -476,7 +476,7 @@ async function handle(message) {
     return reply({
       protocolVersion: "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "codex-team", version: "1.2.1" },
+      serverInfo: { name: "codex-team", version: "1.2.2" },
       instructions:
         "Claude leads; Codex contributes code. Structured assignments require stable request IDs. Poll, review actual changes, independently verify, then record acceptance.",
     });
