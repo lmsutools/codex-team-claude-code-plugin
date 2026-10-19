@@ -20,9 +20,11 @@ export function buildStateCard(context = {}, jobs = [], now = Date.now()) {
   const active = jobs.filter(j => openStatuses.has(j.status) &&
     (["starting", "running", "verifying"].includes(j.status) || !(now - Date.parse(j.finishedAt || j.startedAt) > 86400000))).slice(0, 12);
   const entries = active.filter(j => /^[0-9a-f-]{36}$/.test(j.jobId)).map(j => {
-    const phase = ["implementation", "verification", "reviewer"].includes(j.livePhase) ? j.livePhase : "";
+    const live = ["starting", "running", "verifying"].includes(j.status);
+    const phase = live && ["implementation", "verification", "reviewer"].includes(j.livePhase) ? j.livePhase : "";
     const elapsed = Math.max(0, Math.floor((now - Date.parse(j.startedAt)) / 60000)) || 0;
-    return `${j.jobId}: ${j.status} ${phase}; elapsed ${elapsed}m\n${waitCommand(j.jobId) || "Use codex_status."}`;
+    // A waiter on a finished job returns at once; hand out wait commands only for live work.
+    return `${j.jobId}: ${j.status} ${phase}; elapsed ${elapsed}m\n${live ? waitCommand(j.jobId) || "Use codex_status." : "Finished; awaiting the lead: inspect with codex_status (do not re-arm a waiter)."}`;
   });
   const findings = active.filter(j => j.packetCounts?.total).map(j =>
     `${j.jobId}: packet ${Number(j.packetCounts.met) || 0}/${Number(j.packetCounts.total) || 0} met; open codex_status detail full for findings.`);

@@ -68,7 +68,9 @@ export function compactJob(state, { waitScript, showAutoVerify = false } = {}) {
     delete result.timeoutBasis; delete result.typicalDurationSeconds;
   }
   // Escape-heavy diagnostic text must also respect the serialized character cap.
-  for (const key of ["progress", "readableTail", ...(finishedScout ? [] : ["next"]), "error", "cancellationError", "runtimeFailure", "status", "draftScopePreview", "draftVerificationPreview", "handbookNotesPreview"])
+  // Machine fields (status, livePhase, jobId, waitCommand) are never shortened:
+  // a halved "verification_failed" read as "verificat" and looked like a live job.
+  for (const key of ["progress", "readableTail", ...(finishedScout ? [] : ["next"]), "error", "cancellationError", "runtimeFailure", "draftScopePreview", "draftVerificationPreview", "handbookNotesPreview"])
     while (JSON.stringify(untrustedOutput(result)).length > 1500 && result[key]?.length > (key === "draftVerificationPreview" ? 48 : 0))
       {
         result[key] = result[key].slice(0, Math.max(key === "draftVerificationPreview" ? 48 : 0, Math.floor(result[key].length / 2)));

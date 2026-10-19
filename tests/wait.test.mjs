@@ -9,7 +9,8 @@ import { DatabaseSync } from "node:sqlite";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { readJob, openReadOnlyStore } from "../scripts/state-reader.mjs";
-import { waitForJob, packet, reached, parseArgs, waitDeadline } from "../scripts/wait.mjs";
+import { waitForJob, packet, reached, parseArgs, waitDeadline, alreadyReached } from "../scripts/wait.mjs";
+import { observationTimeoutMs } from "../scripts/background-facts.mjs";
 import { waitCommand } from "../scripts/tool-output.mjs";
 const script = fileURLToPath(new URL("../scripts/wait.mjs", import.meta.url));
 function fixture() {
@@ -155,10 +156,14 @@ test("verification after an expired implementation deadline waits for its own ch
       verification: { startedAt: new Date(now).toISOString() },
       assignment: { verification: [{ timeoutSeconds: 10 }, { timeoutSeconds: 20 }] },
     };
-    assert.equal(waitDeadline(state, now), now + 90000);
-    assert.equal(waitDeadline({ ...state, deadlineAt: new Date(now + 100000).toISOString() }, now), now + 160000);
-    assert.equal(waitDeadline({ ...state, checkPlan: { checks: [{ timeoutSeconds: 40, retryOnTimeout: 1 }] } }, now), now + 140000);
-    assert.equal(waitDeadline({ ...state, assignment: undefined }, now), now + 90000);
+    // Checks, plus the post-check observation bound and its doubled retry (3 × 180 s by default), plus 60 s.
+    const observation = 3 * observationTimeoutMs(state);
+    assert.equal(observation, 540000);
+    assert.equal(waitDeadline(state, now), now + 90000 + observation);
+    assert.equal(waitDeadline({ ...state, deadlineAt: new Date(now + 1000000).toISOString() }, now), now + 1060000);
+    assert.equal(waitDeadline({ ...state, checkPlan: { checks: [{ timeoutSeconds: 40, retryOnTimeout: 1 }] } }, now), now + 140000 + observation);
+    assert.equal(waitDeadline({ ...state, assignment: undefined }, now), now + 90000 + observation);
+    assert.equal(waitDeadline({ ...state, assignment: { verification: [{ timeoutSeconds: 10, host: true }] } }, now), now + 70000 + 2 * observation, "host checks add their pre-check observation");
     f.put(state);
     timer = setTimeout(() => f.put({ status: "verified" }), 60);
     assert.equal((await waitForJob({ jobId: f.id, root: f.root, pollMs: 10 })).status, "verified");

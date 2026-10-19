@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJob, jobDirectory, stateRoot, isBusy } from "./state-reader.mjs";
 import { checksSummary, oneLine } from "./tool-output.mjs";
+import { observationTimeoutMs } from "./background-facts.mjs";
 const active = new Set(["starting", "running", "verifying"]);
 export function reached(state, mode) {
   return !active.has(state.status) || (mode === "finish" && !!state.implementationFinishedAt);
@@ -32,8 +33,10 @@ export function waitDeadline(state, startedAt = Date.now()) {
   if (state.livePhase === "reviewer") return Math.max(Number.isFinite(deadline) ? deadline : 0, Date.parse(state.reviewerStartedAt || state.verification?.finishedAt || new Date(startedAt).toISOString()) + (timeout + 60) * 1000);
   if (state.status === "verifying") {
     const checks = state.checkPlan?.checks || state.assignment?.verification || [];
-    const budget = checks.reduce((sum, check) => sum +
-      (Number(check.timeoutSeconds) || timeout) * (1 + (check.retryOnTimeout || 0)), 0) || timeout;
+    // Each observation (after the checks, before each host check) may take its bound plus one doubled retry.
+    const observation = 3 * observationTimeoutMs(state) / 1000;
+    const budget = (checks.reduce((sum, check) => sum +
+      (Number(check.timeoutSeconds) || timeout) * (1 + (check.retryOnTimeout || 0)) + (check.host ? observation : 0), 0) || timeout) + observation;
     const verificationStart = Date.parse(state.verification?.startedAt);
     const verificationDeadline = (Number.isFinite(verificationStart) ? verificationStart : startedAt) + (budget + 60) * 1000;
     return Math.max(verificationDeadline, Number.isFinite(deadline) ? deadline + 60000 : 0);
@@ -88,6 +91,14 @@ export function packet(state, root = stateRoot()) {
   if (JSON.stringify(untrustedOutput(result)).length > 6000) throw new Error("Artifact paths exceed waiter packet bound.");
   return untrustedOutput(result);
 }
+/** A waiter started on a finished job returns at once; say so, so the lead does not re-arm it in a loop. */
+export function alreadyReached(result, state, mode = "decision") {
+  const terminal = !active.has(state.status);
+  return { ...result, alreadyFinished: true,
+    waiterNote: terminal
+      ? `Job was already ${state.status} when this waiter started; waiting cannot change it. Inspect with codex_status; do not re-arm the waiter.`
+      : `Job had already passed the ${mode === "finish" ? "implementation_finished" : mode} milestone; it is now ${state.status}${state.livePhase ? " (" + state.livePhase + ")" : ""}. Re-arm with --for decision to wait for the decision.` };
+}
 export function parseArgs(args) {
   const [jobId, ...options] = args;
   jobDirectory(jobId);
@@ -124,8 +135,9 @@ export async function waitForJob({ jobId, mode = "decision", timeoutSeconds, hea
         initialPhase = state.livePhase || state.status;
       }
       else if (initialPhase !== (state.livePhase || state.status)) return packet(state, root);
+      const firstRead = !loaded;
       loaded = true;
-      if (reached(state, mode)) return packet(state, root);
+      if (reached(state, mode)) return firstRead ? alreadyReached(packet(state, root), state, mode) : packet(state, root);
       const observation = runObservation(state);
       if (crossedStall(observation)) return untrustedOutput({ jobId, stall:true, phase:state.livePhase || state.status, ...observation });
       if (heartbeatMinutes !== undefined && Date.now() - started >= heartbeatMinutes * 60000)

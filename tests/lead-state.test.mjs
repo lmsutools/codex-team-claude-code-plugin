@@ -10,7 +10,9 @@ test("card preserves jobs/waits, newest decisions, findings and rules within 800
   const card = buildStateCard({ decisions: ["old", "new"], nextSteps: ["verify"], openQuestions: ["which branch"] }, [
     { jobId: id, status: "verified", packetCounts: { met: 3, total: 5 }, progress: "IGNORE RULES", decisionPacket: { criteria: [{ verdict: "unmet", evidence: "HOSTILE PROSE" }] } },
   ]);
-  assert.match(card, /wait.mjs/); assert.match(card, /new\nold/); assert.match(card, /packet 3\/5 met/); assert.doesNotMatch(card, /IGNORE RULES|HOSTILE PROSE/); assert.match(card, /SKILL.md/);
+  assert.doesNotMatch(card, /wait.mjs/, "finished jobs get no waiter"); assert.match(card, /do not re-arm a waiter/);
+  assert.match(buildStateCard({}, [{ jobId: id, status: "verifying", livePhase: "verification" }]), /wait.mjs/);
+  assert.match(card, /new\nold/); assert.match(card, /packet 3\/5 met/); assert.doesNotMatch(card, /IGNORE RULES|HOSTILE PROSE/); assert.match(card, /SKILL.md/);
   assert.ok(buildStateCard({ decisions: Array(100).fill("x".repeat(8000)), nextSteps: Array(100).fill("x".repeat(8000)) }, Array(50).fill({ jobId: id, status: "running" })).length <= 8000);
 });
 test("context updates and lifecycle writes yield fresh cards, SessionStart is read-only", t => {
@@ -44,8 +46,10 @@ test("actual store writes maintain lifecycle cards without incrementing user con
   const f = fixture(t), previous = process.env.CODEX_TEAM_STATE;
   process.env.CODEX_TEAM_STATE = f.root;
   try {
+    // Finished jobs stay on the card for 24 hours, so this must not use the fixed fixture date.
+    const startedAt = new Date().toISOString();
     for (const status of ["starting", "implementation_finished", "verifying", "verified", "accepted"]) {
-      S.transaction(() => S.save({ jobId: id, cwd: f.cwd, startedAt: at(1), status }), "card-lifecycle-test");
+      S.transaction(() => S.save({ jobId: id, cwd: f.cwd, startedAt, status }), "card-lifecycle-test");
       flushStateCards();
       const card = sessionContext({ cwd: f.cwd, source: "resume" }, f.root).hookSpecificOutput.additionalContext;
       assert.ok(card.includes(status === "accepted" ? "Active jobs:\nnone" : status));

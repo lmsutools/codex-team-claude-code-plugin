@@ -7,7 +7,8 @@ import { trimEvent } from "./event-log.mjs";
 import { salvageRun, canSalvage } from "./salvage.mjs";
 import { sandboxProbe } from "./sandbox-probe.mjs";
 import { inspectVerificationRequest,orderedChecks } from "./verification-request.mjs";
-import {backgroundFacts} from "./background-facts.mjs";
+import {observeWithRetry} from "./background-facts.mjs";
+import {verificationOutcome} from "./verification-outcome.mjs";
 import { reviewOptions, findingDispositions, findingPacketBinding } from './review-findings.mjs';
 import { instructionSnapshot, assertReviewInstructions } from './review-instructions.mjs';
 import { scoutEvidenceFloor, scoutThreadEvents } from './review-evidence.mjs';
@@ -1138,7 +1139,8 @@ function prepareVerification(state, input = {}) {
   S.assertIdle(state.cwd, state.jobId);
   P.currentProfile(state);
   state = { ...state, hostAck: input.hostAck, automaticVerification: !!input.automatic, checkLauncher: state.checkLauncher || resolveCodex() };
-  const current = snapshot(state.executionCwd),
+  // The measured cost sizes the post-check observation bound on a loaded machine.
+  const observedAt = Date.now(), current = snapshot(state.executionCwd), observationCostMs = Date.now() - observedAt,
     delta = changes(state.baseline, current, state.assignment.scope);
   if (delta.outOfScope.length || delta.gitMetadataChanged)
     throw new Error(
@@ -1161,7 +1163,7 @@ function prepareVerification(state, input = {}) {
   }
   return S.stageBlobs({ ...state, containmentVersion: 1, status: "verifying", livePhase: "verification", progress: "Running independent checks.",
     decisionPacket: null, decisionPacketPath: null, cancelled: false, autoVerifySkipped: null,
-    verification: { status: "running", startedAt: S.now(), checks: [] },
+    verification: { status: "running", startedAt: S.now(), checks: [], observationCostMs },
     verificationBaseline: current, heartbeatAt: S.now(), reviewStatus: "pending" });
 }
 /** Keep the implementation recoverable even when saving its verification plan fails. */
@@ -1255,7 +1257,9 @@ export function reviewJob(input) {
   const selectedNotes = input.action === "accept" ? H.selectNotes(planned, input.handbookNotes) : [];
   const plannedIdentity = JSON.stringify(planned);
   if (input.action === "accept" && !["verified", "pending_lead_evidence", "accepted"].includes(planned.status))
-    throw new Error("Acceptance requires independent verification to pass.");
+    throw new Error(planned.verification?.status === "observer_timeout"
+      ? "Acceptance requires completed verification. The last run's checks finished (" + (planned.verification.observerTimeout?.checksPassed ?? 0) + " passed, " + (planned.verification.observerTimeout?.checksFailed ?? 0) + " failed) but the post-check observation timed out under machine load, so no verified fingerprint exists. Run codex_verify again."
+      : "Acceptance requires independent verification to pass.");
   // Acceptance compares the project with the verified fingerprint. Hash it
   // before taking the lock; the transaction re-reads the job itself.
   const current =
@@ -1883,7 +1887,8 @@ async function worker(jobId, verification = false) {
   }
   const workerHeartbeat=setInterval(()=>{try{S.withBusyTimeout(0,()=>S.heartbeat(jobId));}catch{}},1000);
   let privateReportDirectory = null,
-    verificationLease = false;
+    verificationLease = false,
+    verificationChecks = null;
   const releaseChecks = async () => {
     if (!verificationLease) return;
     await retryBusy(() => S.transaction(() => {
@@ -1954,6 +1959,7 @@ async function worker(jobId, verification = false) {
         }
       }
       const checks = [], { before } = inspectVerificationRequest(state);
+      verificationChecks = checks;
       const specifications = orderedChecks(state);
       for (const spec of specifications) {
         await persist(jobId, { activeCheck: { id: spec.id, host: spec.host === true }, progress: "Running check " + spec.id });
@@ -1965,7 +1971,7 @@ async function worker(jobId, verification = false) {
           attempt <= (spec.retryOnTimeout || 0);
           attempt++
         ) {
-          if(spec.host) Object.assign(state,await backgroundFacts("host",state));
+          if(spec.host) Object.assign(state,(await observeWithRetry("host",state)).value);
           stdoutPath = artifact(
             jobId,
             "verify-" + spec.id + (attempt ? "-retry" : "") + ".stdout.log",
@@ -2017,7 +2023,7 @@ async function worker(jobId, verification = false) {
         // Interim progress; the final verification write carries every check.
         try {
           S.withBusyTimeout(SOFT_BUSY_MS, () =>
-            S.patch(jobId, { verification: { status: "running", checks } }),
+            S.patch(jobId, { verification: { ...state.verification, status: "running", checks } }),
           );
         } catch (error) {
           if (!S.isBusy(error)) throw error;
@@ -2029,7 +2035,10 @@ async function worker(jobId, verification = false) {
           break;
       }
       await persist(jobId,{progress:"Finalizing checks: observing content and hidden changes.",heartbeatAt:S.now()});
-      const {after,...visibility}=await backgroundFacts("verification",state);
+      const observed=await observeWithRetry("verification",state,{onRetry:async(attempt,bound)=>{
+        try { await persist(jobId,{progress:`Finalizing checks: observation retry ${attempt} (up to ${Math.round(bound/1000)} s) under machine load.`,heartbeatAt:S.now()}); } catch {}
+      }});
+      const {after,...visibility}=observed.value;
       Object.assign(state,visibility);
       const commandChecksComplete = checks.length === specifications.length;
       if (state.checkPlan && commandChecksComplete)
@@ -2051,9 +2060,11 @@ async function worker(jobId, verification = false) {
         status: "verifying", livePhase: "reviewer", progress: "Reviewing acceptance criteria.", reviewerStartedAt: S.now(),
         verifiedFingerprint: passed ? after.fingerprint : null,
         verification: {
+          ...state.verification,
           status: passed ? "passed" : "failed",
           checks,
           filesChangedDuringChecks: before.fingerprint !== after.fingerprint,
+          observation: { attempts: observed.attempts },
           finishedAt: S.now(),
         },
         finishedAt: S.now(),
@@ -2388,10 +2399,14 @@ async function worker(jobId, verification = false) {
   } catch (e) {
     try {
       let observation={};
-      if(verification) try {const {after,...visibility}=await backgroundFacts("verification",state);observation={...visibility,...storedReview({...state,...visibility},after,{planned:true})};}
+      const cancelledNow=fs.existsSync(artifact(jobId, "cancel"));
+      // Re-observing after an observer timeout would wait out another full bound for the same result.
+      if(verification && e?.observerTimeout) observation={reviewFingerprint:null,reviewFingerprintReason:"Post-check observation timed out; no review observation was recorded."};
+      else if(verification) try {const {after,...visibility}=(await observeWithRetry("verification",state,{retries:0})).value;observation={...visibility,...storedReview({...state,...visibility},after,{planned:true})};}
       catch(failure){observation={reviewFingerprint:null,reviewFingerprintReason:failure.message.slice(0,300)};}
       await persist(jobId, {
         ...observation,
+        ...(verification ? verificationOutcome(state.verification, verificationChecks || state.verification?.checks || [], e, { cancelled: cancelledNow }) : {}),
         ...(verification && e.message.startsWith("Host check refused") ? {result:{...state.result,blockers:[...(state.result?.blockers || []),e.message]}} : {}),
         status: verification ? "verification_failed" : fs.existsSync(artifact(jobId, "cancel")) ? "cancelled" : "failed",
         ...(verification && fs.existsSync(artifact(jobId, "cancel")) ? { cancelled: true } : {}),
