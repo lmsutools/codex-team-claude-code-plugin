@@ -258,11 +258,12 @@ test("P4: sibling branch-tracking entries and injected GIT_CONFIG_* never count 
 
 test("P4: a 1.2.1 snapshot still compares by its raw digests", () => {
   const cwd = F.project();
-  const now = gitSecuritySnapshot(cwd);
+  const now = gitSecuritySnapshot(cwd, { legacy: true });
   const legacyBefore = { entries: now.legacy, hash: "old" };
   assert.equal(compareGitSecurity(legacyBefore, now).changed, false);
+  assert.equal(gitSecuritySnapshot(cwd).legacy.effectiveConfig, undefined, "the raw listing is computed only on request");
   git(cwd, ["config", "branch.main.description", "touched"]);
-  assert.equal(compareGitSecurity(legacyBefore, gitSecuritySnapshot(cwd)).changed, true, "old snapshots keep their old, conservative meaning");
+  assert.equal(compareGitSecurity(legacyBefore, gitSecuritySnapshot(cwd, { legacy: true })).changed, true, "old snapshots keep their old, conservative meaning");
 });
 
 // ── P5: commits after acceptance ──
@@ -574,4 +575,24 @@ test("P8: worktree integration checks the original against its own baseline (cor
   assert.equal(integrated.integration.status, "applied");
   assert.deepEqual(integrated.integration.files, ["existing.txt"]);
   assert.equal(fs.readFileSync(path.join(cwd, "existing.txt"), "utf8"), "export const answer = 42;\n");
+});
+
+test("P8: scouts reading through a PowerShell literal list earn evidence only when the output shows the content", async () => {
+  const { fileReads } = await import("../scripts/review-evidence.mjs");
+  const { bindSegment, resolveArguments, outputShowsContent } = await import("../scripts/ps-bindings.mjs");
+  const cwd = F.project();
+  // The exact command shape gpt-6-astra scouts produced on 0.153.2 and 0.163.0 (POSIX quote concatenation included).
+  const command = String.raw`"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -Command '$paths = @('"'existing.txt', 'answer.mjs'); foreach ("'$path in $paths) { Write-Output "FILE $path"; $line = 0; Get-Content -LiteralPath $path | ForEach-Object { $line++; '"'{0,4}: {1}' -f "'$line, $_ } }'`;
+  const event = output => ({ type: "item.completed", item: { type: "command_execution", command, status: "completed", exit_code: 0, aggregated_output: output } });
+  assert.deepEqual([...fileReads([event("FILE existing.txt\n   1: Baseline input\nFILE answer.mjs\n")], ["existing.txt", "answer.mjs"], cwd)], ["existing.txt"]);
+  assert.deepEqual([...fileReads([event("FILE existing.txt\n   1: something else\n")], ["existing.txt"], cwd)], [], "an indirect read needs the content in the output");
+  const vars = new Map();
+  bindSegment(vars, "$p = 'a.mjs'"); bindSegment(vars, "$p = 'b.mjs', 'c.mjs'"); bindSegment(vars, "foreach ($x in $p) {");
+  assert.deepEqual(resolveArguments(vars, ["-LiteralPath", "$x", "$p", "$unknown"]), ["b.mjs", "c.mjs", "b.mjs", "c.mjs"]);
+  bindSegment(vars, '$q = "$env:USERPROFILE/x"');
+  assert.equal(vars.has("q"), false, "interpolated strings are not literals");
+  assert.equal(outputShowsContent("   1: export const x = 1;", "export const x = 1;\n"), true);
+  assert.equal(outputShowsContent("anything", "{\n}\n"), false, "files without a substantial line cannot be proven");
+  const literal = { type: "item.completed", item: { type: "command_execution", command: "powershell.exe -Command 'Get-Location; git status --short; Get-Content existing.txt'", status: "completed", exit_code: 0, aggregated_output: "x" } };
+  assert.deepEqual([...fileReads([literal], ["existing.txt"], cwd)], ["existing.txt"], "literal compound reads are unchanged");
 });

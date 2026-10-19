@@ -4,7 +4,7 @@ import path from "node:path";
 import {inventory,compareInventory} from "./hidden-inventory.mjs";
 import {gitSecuritySnapshot,compareGitSecurity} from "./git-security.mjs";
 import {inside} from "./check-executable.mjs";
-const observeGit = root => {try{return gitSecuritySnapshot(root);}catch(error){return {error:error.message.slice(0,500)};}};
+const observeGit = (root,options) => {try{return gitSecuritySnapshot(root,options);}catch(error){return {error:error.message.slice(0,500)};}};
 export function captureVisibility(state,dir) {
   const file=path.join(dir,"visibility-before.json");
   if(fs.existsSync(file)) return;
@@ -21,7 +21,7 @@ export function inheritVisibility(previous,oldDir,newDir) {
 }
 export function finishVisibility(state,dir,reported=[]) {
   let before;try{before=JSON.parse(fs.readFileSync(path.join(dir,"visibility-before.json"),"utf8"));}catch{}
-  const after=inventory(state.executionCwd), git=observeGit(state.executionCwd);
+  const after=inventory(state.executionCwd), git=observeGit(state.executionCwd,{legacy:!!before?.git && before.git.version!==2});
   const paths=[];
   const ignored=[...(before?.listing?.entries || []),...after.entries].filter(e=>e.ignored).map(e=>e.file);
   for(const value of reported) for(const token of String(value).slice(0,8192).split(/[\s'"\x60;,|<>]+/)) {

@@ -5,6 +5,7 @@ import {readJob,jobDirectory} from './state-reader.mjs';
 import { safeFile } from './git.mjs';
 import { lineCount } from './review-findings.mjs';
 import { boundedBytes } from './baseline-bytes.mjs';
+import { bindSegment, resolveArguments, outputShowsContent } from './ps-bindings.mjs';
 export function readEvents(file,limit=32*1024*1024) {
   try {
     const text=boundedBytes(file,limit).toString('utf8'),events=[];
@@ -80,6 +81,10 @@ function unwrap(command) {
       (exe==='cmd' && /^\/c$/i.test(arg.value)) ||
       (['bash','sh'].includes(exe) && /^-[lc]*c[lc]*$/.test(arg.value))));
     if(flag<0)break;
+    // A single remaining argument is decoded by the tokenizer, including the POSIX quote
+    // concatenation Codex uses to show embedded quotes ('...@('"'src/a.mjs'"'...').
+    const rest=args.slice(flag+1);
+    if(rest.length===1) {text=rest[0].value;continue;}
     text=text.slice(args[flag].end).trim();
     if((text[0]==='"' || text[0]==="'") && text.at(-1)===text[0])text=text.slice(1,-1);
   }
@@ -93,14 +98,19 @@ const nameOnly=/^(?:--(?:name-only|name-status|stat|numstat|shortstat|files|file
 function readsIn(command) {
   const text=unwrap(command);
   if (/\b(?:function|Set-Alias|New-Alias|alias|Out-Null)\b|[\w-]+\s*\(\)\s*\{|>\s*["']?(?:\/dev\/null|\$null|nul)\b/i.test(text)) return [];
-  const parts=segments(text).map(segment=>tokens(unwrap(segment)).map(t=>t.value));
+  // Variable bindings seen before each segment (PowerShell literal lists and foreach).
+  const vars=new Map(), bound=[];
+  const parts=segments(text).map(segment=>{bindSegment(vars,unwrap(segment));bound.push(new Map(vars));return tokens(unwrap(segment)).map(t=>t.value);});
   const prints=parts.some(argv=>/^(?:echo|printf|write-output|write-host|out-host)$/i.test(executable(argv[0])));
   const reads=[];
   for(const argv0 of parts) {
     const argv=[...argv0],exe=executable(argv.shift());
     if(argv.some(a=>nameOnly.test(a) || (['rg','grep','head','tail','git'].includes(exe) && /^-[^-]*[lcL][^-]*$/.test(a))))continue;
     if (argv.some((a,i)=>/^(?:-n0|--(?:lines|bytes)=0)$/.test(a) || (/^(?:-n|--lines|--bytes|-TotalCount|-First|-Head)$/i.test(a) && argv[i+1]==='0')))continue;
-    if(readers.has(exe)) {reads.push({args:argv,search:false});continue;}
+    if(readers.has(exe)) {
+      const resolved=resolveArguments(bound[parts.indexOf(argv0)],argv);
+      reads.push({args:argv,search:false,...(resolved.length ? {resolved} : {})});continue;
+    }
     let search=searches.has(exe);
     if(exe==='git') {
       if(argv[0]?.startsWith('-'))continue;
@@ -151,7 +161,15 @@ export function fileReads(events, files, cwd, copies = []) {
     let names;
     for(const command of commands) {
       const args=command.args.map(evidenceKey);
-      if(!command.search) {for(const arg of args){const file=aliases.get(arg);if(file)reads.add(file);}continue;}
+      if(!command.search) {
+        for(const arg of args){const file=aliases.get(arg);if(file)reads.add(file);}
+        // Variable-resolved reads count only when the output shows the file's content.
+        for(const arg of (command.resolved || []).map(evidenceKey)){
+          const file=aliases.get(arg);
+          if(file && !reads.has(file)) { let content=null; try { content=boundedBytes(path.resolve(cwd,file),1024*1024).toString('utf8'); } catch {} if(content!==null && outputShowsContent(item.aggregated_output,content)) reads.add(file); }
+        }
+        continue;
+      }
       if(!names) {
         names=new Set();
         for(const line of String(item.aggregated_output || '').slice(0,65536).split(/\r?\n/)) {

@@ -53,7 +53,7 @@ export function partitionConfig(entries) {
   return {relevant,benign};
 }
 const gitConfig=(root,args)=>spawnSync(trustedExecutable("git",root),["-C",root,"config",...args],{env:observerEnvironment(),encoding:"utf8",windowsHide:true,timeout:15000,maxBuffer:4*1048576});
-export function gitSecuritySnapshot(root) {
+export function gitSecuritySnapshot(root,{legacy:withLegacy=false}={}) {
   const dir=gitDirectory(root), entries={}, legacy={}, benign={};
   // Effective configuration, including origins and conditional includes, without executing programs.
   const config=gitConfig(root,["--list","--show-origin","--includes","-z"]);
@@ -61,8 +61,11 @@ export function gitSecuritySnapshot(root) {
   const effective=partitionConfig(configEntries(config.stdout,true));
   entries.effectiveConfig=digest(JSON.stringify(effective.relevant));
   benign.effectiveConfig=digest(JSON.stringify(effective.benign));
-  const listed=spawnSync(trustedExecutable("git",root),["-C",root,"config","--list","--show-origin","--includes"],{env:observerEnvironment(),encoding:"utf8",windowsHide:true,timeout:15000,maxBuffer:4*1048576});
-  legacy.effectiveConfig=listed.status===0 && !listed.error ? digest(listed.stdout) : null;
+  // The raw 1.2.1 listing costs one more Git process; only a comparison with a 1.2.1 snapshot needs it.
+  if(withLegacy) {
+    const listed=spawnSync(trustedExecutable("git",root),["-C",root,"config","--list","--show-origin","--includes"],{env:observerEnvironment(),encoding:"utf8",windowsHide:true,timeout:15000,maxBuffer:4*1048576});
+    legacy.effectiveConfig=listed.status===0 && !listed.error ? digest(listed.stdout) : null;
+  }
   for(const name of ["config","info/attributes","info/exclude"]) {const file=path.join(dir,name);try {const stat=fs.statSync(file);if(stat.size>1048576) throw Error("Git metadata exceeds 1 MiB");const bytes=fs.readFileSync(file);legacy[name]=entries[name]=digest(bytes);
     if(name==="config") {
       // The common config file, parsed by Git itself; an unparsable file keeps its raw digest.
