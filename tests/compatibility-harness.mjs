@@ -152,7 +152,11 @@ try {
   ]);
   // Additive 1.2 run metadata is asserted in runs.test.mjs. This golden keeps
   // checking the existing 1.1.x response fields without freezing optional additions.
-  const additions = new Set(["runningCommandStartedAt", "runningCommandCount", "runningCommandSeconds", "timeoutBasis", "typicalDurationSeconds", "salvageSeconds", "salvage", "lastEventAt", "secondsSinceLastEvent", "readableTail", "bootstrapReads", "resumeHint", "otherActiveJobs", "totalJobCount", "jobsDetail"]);
+  // 1.2.2 additions are asserted in v122.test.mjs; several depend on the host (toolchain homes, Codex config) or on timing.
+  const additions = new Set(["runningCommandStartedAt", "runningCommandCount", "runningCommandSeconds", "timeoutBasis", "typicalDurationSeconds", "salvageSeconds", "salvage", "lastEventAt", "secondsSinceLastEvent", "readableTail", "bootstrapReads", "resumeHint", "otherActiveJobs", "totalJobCount", "jobsDetail",
+    "toolchain", "sharedGitDirectory", "ignored", "effectiveServiceTier", "serviceTier", "serviceTierInherited", "serviceTierOmitted", "serviceTierAdvice", "autoPassEnv", "toolchainHint", "sandboxSpawnTimeouts", "networkGuard", "firstRun", "boundMs"]);
+  // Scoped: review evidence keeps its own (1.1.x) "observation" field.
+  const verificationAdditions = new Set(["observation", "observationCostMs", "observerTimeout"]);
   function normalize(value, key = "") {
     if (value === null) return null;
     if (key === "findingPacketHash") return Array.isArray(value) ? value.map(() => 0) : "<findingPacketHash>";
@@ -161,7 +165,7 @@ try {
     if (Array.isArray(value)) return value.map((v) => normalize(v));
     if (typeof value === "object")
       return Object.fromEntries(
-        Object.entries(value).filter(([k]) => !additions.has(k)).map(([k, v]) => [k, key === "gitConfigChanged" && k === "hash" ? "<git-config-hash>" : normalize(v, k)]),
+        Object.entries(value).filter(([k]) => !additions.has(k) && !(key === "verification" && verificationAdditions.has(k))).map(([k, v]) => [k, key === "gitConfigChanged" && k === "hash" ? "<git-config-hash>" : normalize(v, k)]),
       );
     if (typeof value !== "string") return value;
     if (key === "version" && /^1\.\d+\.\d+$/.test(value)) return "<plugin-version>";
