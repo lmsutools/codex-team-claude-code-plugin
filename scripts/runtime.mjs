@@ -1598,6 +1598,7 @@ export async function runProcess(
     parseError = null,
     authFailure = null,
     authFailureSource = "stderr";
+  const spawnTimeouts = [];
   const stderr = fs.openSync(errorFile, "a", 0o600),
     stdout = fs.openSync(eventsFile, "a", 0o600),
     started = Date.now();
@@ -1728,6 +1729,7 @@ export async function runProcess(
       if (state.execRole !== "reviewer") try { S.withBusyTimeout(0, () => S.patch(state.jobId, {runtimeFailure:failure})); } catch {}
     };
     let diagnosticLine = "", oversizedDiagnostic = false, diagnosticReceivedAt = 0;
+    const noteSpawn = line => { if (onEvent && spawnTimeouts.length < 20 && D.SPAWN_TIMEOUT.test(line)) spawnTimeouts.push(redactDefault(line.trim()).slice(-600)); };
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", data => {
       diagnosticReceivedAt = Date.now();
@@ -1735,7 +1737,7 @@ export async function runProcess(
         if (!oversizedDiagnostic) diagnosticLine += part;
         if (diagnosticLine.length > 65536) { diagnosticLine = ""; oversizedDiagnostic = true; }
         if (part.endsWith("\n")) {
-          if (!oversizedDiagnostic) noteAuth(diagnosticLine);
+          if (!oversizedDiagnostic) { noteAuth(diagnosticLine); noteSpawn(diagnosticLine); }
           diagnosticLine = ""; oversizedDiagnostic = false;
         }
       }
@@ -1834,6 +1836,7 @@ export async function runProcess(
       stopReason,
       parseError,
       ...(authFailure ? { authFailure, authFailureSource } : {}),
+      ...(spawnTimeouts.length ? { spawnTimeouts } : {}),
       durationMs: Date.now() - started,
       ...(secureLogs ? { secretCount } : {}),
     };
@@ -1966,19 +1969,20 @@ async function worker(jobId, verification = false) {
         const attempts = [];
         let result, stdoutPath, stderrPath;
         G.allowCommand(state.profile, [spec.command, ...spec.args], spec);
+        let spawnRetries = 0;
         for (
           let attempt = 0;
-          attempt <= (spec.retryOnTimeout || 0);
+          attempt <= (spec.retryOnTimeout || 0) + spawnRetries;
           attempt++
         ) {
           if(spec.host) Object.assign(state,(await observeWithRetry("host",state)).value);
           stdoutPath = artifact(
             jobId,
-            "verify-" + spec.id + (attempt ? "-retry" : "") + ".stdout.log",
+            "verify-" + spec.id + (attempt ? "-retry" + (attempt > 1 ? attempt : "") : "") + ".stdout.log",
           );
           stderrPath = artifact(
             jobId,
-            "verify-" + spec.id + (attempt ? "-retry" : "") + ".stderr.log",
+            "verify-" + spec.id + (attempt ? "-retry" + (attempt > 1 ? attempt : "") : "") + ".stderr.log",
           );
           fs.writeFileSync(stdoutPath, "");
           fs.writeFileSync(stderrPath, "");
@@ -1989,7 +1993,9 @@ async function worker(jobId, verification = false) {
             errorFile: stderrPath,
             timeoutSeconds: spec.timeoutSeconds,
           });
-          attempts.push({ ...result, stdoutPath, stderrPath });
+          const runnerNotStarted = !spec.host && !result.stopReason && result.code !== 0 && D.SPAWN_TIMEOUT.test(tail(stderrPath));
+          attempts.push({ ...result, stdoutPath, stderrPath, ...(runnerNotStarted ? { sandboxRunnerStartTimeout: true } : {}) });
+          if (runnerNotStarted && !spawnRetries) { spawnRetries = 1; continue; }
           if (result.stopReason !== "timed_out") break;
         }
         let coverageError = null;
@@ -2085,6 +2091,7 @@ async function worker(jobId, verification = false) {
       executionCwd: state.executionCwd,
       timeoutMs: state.deadlineAt ? Math.max(1, Date.parse(state.deadlineAt) - Date.now()) : state.timeoutSeconds * 1000,
       jobId,
+      thorough: state.autoResumes?.at(-1)?.reason === "sandbox_spawn_timeout",
     });
     if (preflight.status === "blocked") {
       const runtimeFailure = {
@@ -2304,6 +2311,12 @@ async function worker(jobId, verification = false) {
       (!state.assignment ? D.readTail(reportPath, 20000) : "");
     if (!runtimeFailure && D.classifyFailure(blockedText) && D.classifyFailure(blockedText).kind !== "auth_expired")
       runtimeFailure = D.failureRecord(blockedText, { cwd: state.cwd, source: "report" });
+    // Codex logs its own runner-start timeouts on stderr. When the worker stopped
+    // over one (it reported it, or the turn did not succeed), the job is blocked by
+    // a transient runtime condition, not by its code; a recovery re-probes first.
+    const spawnReported = [...(structured?.blockers || []), ...(structured?.sandboxLimits || [])].some(text => D.SPAWN_TIMEOUT.test(String(text)));
+    if (!runtimeFailure && result.spawnTimeouts?.length && (spawnReported || !successful))
+      runtimeFailure = D.failureRecord(result.spawnTimeouts.at(-1), { cwd: state.cwd, source: "stderr" });
     if (
       (!runtimeFailure || ["command", "report"].includes(runtimeFailure.source)) &&
       result.code !== 0 &&
@@ -2324,7 +2337,7 @@ async function worker(jobId, verification = false) {
         state.assignment?.scope,
       );
       // Login failures belong to the job, not the persistent sandbox-health cache.
-      if (runtimeFailure.kind !== "auth_expired" && ["stderr", "event"].includes(runtimeFailure.source)) D.recordFailure(
+      if (runtimeFailure.kind !== "auth_expired" && !runtimeFailure.transient && ["stderr", "event"].includes(runtimeFailure.source)) D.recordFailure(
         state.cwd,
         runtime,
         runtimeFailure,
@@ -2369,6 +2382,7 @@ async function worker(jobId, verification = false) {
       ...(state.profile ? { policyFindings, secretFindings } : {}),
     };
     finalState.cliFailure = cliFailure;
+    if (result.spawnTimeouts?.length) finalState.sandboxSpawnTimeouts = { count: result.spawnTimeouts.length, recovered: !runtimeFailure, last: result.spawnTimeouts.at(-1) };
     if(state.assignment) Object.assign(finalState,storedReview({...state,...finalState},after));
     if (commandDenied) finalState.commandDenied = true;
     finalState.contractFailure = !!result.parseError || !!error?.startsWith("Invalid structured report:");

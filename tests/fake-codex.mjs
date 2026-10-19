@@ -63,6 +63,16 @@ if (args[0] === "sandbox") {
     setInterval(() => {}, 1000);
     await new Promise(() => {});
   }
+  // First call only: emulate first-run setup that outlasts one probe, or a runner start timeout.
+  const probeCalls = fs.readFileSync(process.env.CODEX_TEAM_FAKE_PROBE + ".calls", "utf8").split("\n").filter(Boolean).length;
+  if (control.mode === "timeout-once" && probeCalls <= 1) {
+    setInterval(() => {}, 1000);
+    await new Promise(() => {});
+  }
+  if ((control.mode === "spawn-once" && probeCalls <= 1) || control.mode === "spawn-always") {
+    console.error("Error: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");
+    process.exit(1);
+  }
   if (control.mode === "nomarker") {
     process.exit(0);
   }
@@ -188,6 +198,10 @@ if (prompt.includes("EMIT_MULTILINE")) {
     }),
   );
 }
+if (prompt.includes("SPAWN_TIMEOUT_STOP") || prompt.includes("SPAWN_TIMEOUT_RECOVERED")) {
+  // Codex's own router log line for a Windows runner that did not start in time.
+  console.error(new Date().toISOString() + " ERROR codex_core::tools::router: error=apply_patch verification failed: Failed to read file to update answer.mjs: fs sandbox helper failed with status exit code: 1: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");
+}
 if (prompt.includes("SANDBOX_FAIL_RUNNING")) {
   // Own CLI error evidence can block project health; command stdout cannot (R3).
   console.log(JSON.stringify({ type: "error", message: "helper_unknown_error: setup refresh had errors" }));
@@ -267,6 +281,7 @@ if (prompt.includes("WAIT_FOREVER")) {
       args.includes("--output-schema")
         ? JSON.stringify(scout ? (prompt.includes("INVALID_SCOUT") ? { ...brief, files: [{ path: "../bad" }] } : brief) : {
             ...(prompt.includes("HANDBOOK_NOTES") ? { handbookNotes: ["Use deterministic fixtures", "Use deterministic fixtures"], sandboxLimits: ["cleanup EPERM"] } : {}),
+            ...(prompt.includes("SPAWN_TIMEOUT_STOP") ? { sandboxLimits: ["apply_patch verification failed: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready"] } : {}),
             summary: args.includes("resume")
               ? "Revision completed"
               : "Implementation completed",

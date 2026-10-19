@@ -22,7 +22,22 @@ export function failureTracker() {
     text(stderr = "") { return (failed || (completed ? "" : lastError || stderr)).slice(-6000); },
   };
 }
+/**
+ * A Windows sandbox runner that did not start in time (spawn_ready) is a load or
+ * first-run symptom, not a permission failure. The same thread may resume once
+ * the next preflight (with the long first-run bound) proves the runner starts.
+ */
+function spawnTimeoutResumable(state, orphanAlive) {
+  const failure = state.runtimeFailure;
+  if (failure?.code !== "sandbox_spawn_timeout" || !failure.transient) return false;
+  if (!["blocked_runtime", "starting"].includes(state.status)) return false;
+  if (state.contractFailure || state.commandDenied || state.cancellationRequested) return false;
+  if (state.deadlineAt && Date.now() >= Date.parse(state.deadlineAt)) return false;
+  if (!state.threadId || orphanAlive || state.budget?.exceeded?.length || state.budget?.atLimit?.length) return false;
+  return !(state.autoResumes || []).some(r => r.reason === "sandbox_spawn_timeout");
+}
 export function classifyTransientFailure(state, { crashed = false, orphanAlive = false } = {}) {
+  if (!crashed && spawnTimeoutResumable(state, orphanAlive)) return "sandbox_spawn_timeout";
   // A completed worker already recorded structured exclusions. Crash diagnostics
   // come only from stderr/worker-fault, never model or command events.jsonl text.
   const text = crashed
@@ -54,6 +69,7 @@ export function planAutoResume(state, options = {}) {
 export function continuationPrompt(state) {
   const reason = state.autoResumes?.at(-1)?.reason || "interruption";
   if (state.mode === "scout") return "Continue the same read-only exploration; do not implement or edit. Return the strict scout brief.";
+  if (reason === "sandbox_spawn_timeout") return "The Windows sandbox runner timed out while starting (spawn_ready). It has been re-checked and starts again. Continue the same assignment from where you stopped: retry the tool call that failed, re-check the working tree before editing, and do not redo completed edits. Return the requested final report.";
   return `You were interrupted by a transient ${reason}. Continue the same assignment from where you stopped; re-check the working tree before editing; do not redo completed edits. Return the requested final report.`;
 }
 export function resetExecState(state) {

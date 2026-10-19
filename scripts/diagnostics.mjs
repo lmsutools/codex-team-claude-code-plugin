@@ -29,13 +29,24 @@ const redact = (text) =>
       /((?:api[_-]?key|access[_-]?token|authorization)\s*[:=]\s*)[^\s,;]+/gi,
       "$1[redacted]",
     );
+/** Codex's runner start timeout: a load/first-run symptom, distinct from ACL setup failures. */
+export const SPAWN_TIMEOUT = /timed out after \d+\s*ms waiting for runner spawn_ready|runner pipe closed before spawn_ready|expected spawn_ready from runner/i;
+const SPAWN_TIMEOUT_FIRST_LINE = /^(?:(?:Error:|Error executing (?:command|tool):)\s*)?(?:windows )?sandbox failed: (?:timed out after \d+\s*ms waiting for runner spawn_ready|runner pipe closed before spawn_ready)/i;
+const spawnTimeout = () => ({
+  category: "sandbox_setup",
+  code: "sandbox_spawn_timeout",
+  transient: true,
+  message:
+    "Codex's Windows sandbox runner did not start in time (spawn_ready). This usually means first-run sandbox setup for a new folder or heavy machine load, not a permission failure.",
+});
 export function classifyFailure(text, {source = "stderr"} = {}) {
   // Tool output may be source code containing our own diagnostic fixtures.
   if (source === "command") {
     const ownError=String(text).trimStart().split(/\r?\n/,1)[0].slice(0,2048);
-    if (!/^(?:(?:Error:|Error executing (?:command|tool):)\s*)?(?:helper_unknown_error:|(?:Windows )?sandbox(?:(?: error)?:|[^\r\n]{0,120}setup[^\r\n]{0,80}failed)|setup refresh had errors|runtime read\/execute validation failed)/i.test(ownError)) return null;
+    if (!/^(?:(?:Error:|Error executing (?:command|tool):)\s*)?(?:helper_unknown_error:|(?:Windows )?sandbox(?:(?: error)?:|[^\r\n]{0,120}setup[^\r\n]{0,80}failed)|setup refresh had errors|runtime read\/execute validation failed)/i.test(ownError)) return SPAWN_TIMEOUT_FIRST_LINE.test(ownError) ? spawnTimeout() : null;
     text=ownError;
   }
+  if (SPAWN_TIMEOUT.test(String(text))) return spawnTimeout();
   const ownAuth = source !== "command" && String(text).split(/\r?\n/).some(line => {
     // MCP and tool diagnostics share stderr with Codex when profiles are inherited.
     if (/\bmcp\b|mcp[_-]\w+|\btool(?:s|[_-]\w+)?\b|\bcommand(?:[_ -](?:output|execution))\b/i.test(line)) return false;
@@ -361,6 +372,23 @@ function table() {
     "CREATE TABLE IF NOT EXISTS runtime_health (key TEXT PRIMARY KEY,data TEXT NOT NULL)",
   );
 }
+/** Bound for one preflight attempt: long for a folder this runtime never set up. */
+export function probeBound({ firstRun = true, env = process.env } = {}) {
+  const configured = Number(env.CODEX_TEAM_PROBE_TIMEOUT_MS);
+  if (Number.isFinite(configured) && configured >= 1000) return Math.min(configured, 600000);
+  return firstRun ? 180000 : 60000;
+}
+const warmKey = (executionCwd, runtime) => "warm:" + hash(S.key(executionCwd) + "\0" + runtime.fingerprint);
+/** A folder whose sandbox setup this runtime completed (a probe passed there). */
+export function warmRoot(executionCwd, runtime) {
+  table();
+  const row = S.db().prepare("SELECT data FROM runtime_health WHERE key=?").get(warmKey(executionCwd, runtime));
+  return row ? JSON.parse(row.data) : null;
+}
+function saveWarmRoot(executionCwd, runtime, data) {
+  table();
+  S.db().prepare("INSERT INTO runtime_health(key,data) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET data=excluded.data").run(warmKey(executionCwd, runtime), JSON.stringify(data));
+}
 function healthKey(cwd, runtime) {
   return hash(S.key(cwd) + "\0" + runtime.fingerprint);
 }
@@ -389,6 +417,8 @@ export function recordFailure(
 ) {
   // Contributor reports and command stdout are evidence for this job only.
   if (["command", "report"].includes(failure?.source)) return null;
+  // A runner-start timeout is transient: the next job's preflight re-probes instead.
+  if (failure?.transient) return null;
   return S.transaction(() => {
     const prior = health(cwd, runtime);
     return saveHealth(cwd, runtime, {
@@ -477,6 +507,7 @@ export function probeRuntime(
     timeoutMs = 20000,
     force = false,
     jobId = null,
+    thorough = false,
   } = {},
 ) {
   const cached = health(cwd, runtime);
@@ -534,21 +565,43 @@ export function probeRuntime(
     `process.stdout.write(${JSON.stringify(nonce)})`,
   ];
   const marks = logMarks();
-  const checked = spawnSync(binary.command, args, {
-    cwd: executionCwd,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: Math.min(20000, Math.max(1000, timeoutMs)),
-    maxBuffer: 1048576,
-  });
+  // First-run setup for a folder (ACLs for the workspace, .git protection) can
+  // take most of a minute on a loaded machine, and Codex itself waits only 15 s
+  // for its runner. Give an unseen folder a long bound and retry one timeout:
+  // the setup helper keeps running after the probe is stopped.
+  const warm = warmRoot(executionCwd, runtime);
+  const firstRun = !warm || thorough;
+  const bound = probeBound({ firstRun });
+  const budgetEnd = Date.now() + Math.max(1000, timeoutMs);
+  const attempts = [];
+  let checked;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const remaining = budgetEnd - Date.now();
+    if (attempt && remaining < 1000) break;
+    const started = Date.now();
+    checked = spawnSync(binary.command, args, {
+      cwd: executionCwd,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: Math.min(bound, Math.max(1000, remaining)),
+      maxBuffer: 1048576,
+    });
+    const passed = checked.status === 0 && checked.stdout?.includes(nonce);
+    const runnerTimeout = !passed && SPAWN_TIMEOUT.test(String(checked.stderr || "") + String(checked.stdout || ""));
+    attempts.push({ durationMs: Date.now() - started, outcome: passed ? "passed" : checked.error?.code === "ETIMEDOUT" ? "timed_out" : runnerTimeout ? "runner_start_timeout" : "failed" });
+    if (passed || (checked.error?.code !== "ETIMEDOUT" && !runnerTimeout)) break;
+  }
   const at = S.now();
+  const timing = { firstRun, boundMs: bound, attempts };
   if (checked.status === 0 && checked.stdout?.includes(nonce)) {
+    try { saveWarmRoot(executionCwd, runtime, { at, durationMs: attempts.at(-1).durationMs, attempts: attempts.length }); } catch {}
     return S.transaction(() => {
       const latest = health(cwd, runtime);
       if (latest?.status === "blocked" && !latest.readOnly && readOnly)
         return {
           ...latest,
           probeExecuted: true,
+          ...timing,
           latestProbe: { status: "passed", at, readOnly },
           reason:
             "Read-only probe passed; the recorded workspace-write failure still requires a workspace-write probe.",
@@ -559,6 +612,7 @@ export function probeRuntime(
         readOnly,
         probeExecuted: true,
         executionCwd,
+        ...timing,
         scope:
           "One command launched under the requested sandbox profile; not implementation or test acceptance.",
       });
@@ -577,11 +631,13 @@ export function probeRuntime(
   );
   if (checked.error?.code === "ETIMEDOUT") {
     failure.code = "sandbox_probe_timeout";
-    failure.message = "Sandbox check exceeded its bounded timeout.";
+    failure.message = "Sandbox check exceeded its bounded timeout (" + attempts.length + " attempt(s), up to " + Math.round(bound / 1000) + " s each" + (firstRun ? ", first-run bound" : "") + "). First-run setup may still be running; probe again in a minute.";
   }
   failure.recovery = recovery(cwd, jobId, failure.diagnostics);
+  // A transient runner-start failure blocks this job but is not cached for the project.
   return {
-    ...recordFailure(cwd, runtime, failure, readOnly, jobId),
+    ...(recordFailure(cwd, runtime, failure, readOnly, jobId) || { status: "blocked", at, readOnly, jobId, failure }),
     probeExecuted: true,
+    ...timing,
   };
 }

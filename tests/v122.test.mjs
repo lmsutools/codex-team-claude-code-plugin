@@ -10,6 +10,9 @@ import { waitForJob, alreadyReached } from "../scripts/wait.mjs";
 import { observationTimeoutMs, observeWithRetry, observerTimeoutError, OBSERVATION_MIN_MS, OBSERVATION_MAX_MS } from "../scripts/background-facts.mjs";
 import { verificationOutcome } from "../scripts/verification-outcome.mjs";
 import { buildStateCard } from "../scripts/lead-state.mjs";
+import * as D from "../scripts/diagnostics.mjs";
+import { classifyTransientFailure, continuationPrompt } from "../scripts/recovery.mjs";
+import { buildWorkerPrompt } from "../scripts/worker-prompt.mjs";
 const F = fixture("v122");
 const withEnv = async (values, run) => {
   const previous = Object.fromEntries(Object.keys(values).map(k => [k, process.env[k]]));
@@ -113,4 +116,89 @@ test("P2: a slow observation retries and still verifies; a persistent timeout is
     assert.equal(view.status, "verification_failed");
     assert.equal(view.checks.status, "observer_timeout");
   });
+});
+
+// ── P1: first-run sandbox setup and runner start timeouts ──
+
+test("P1: classification of runner start timeouts is narrow and transient", () => {
+  const line = "2026-10-18T11:08:45Z ERROR codex_core::tools::router: error=apply_patch verification failed: fs sandbox helper failed with status exit code: 1: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready";
+  assert.equal(D.classifyFailure(line).code, "sandbox_spawn_timeout");
+  assert.equal(D.classifyFailure(line).transient, true);
+  assert.equal(D.classifyFailure("windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready\nmore", { source: "command" }).code, "sandbox_spawn_timeout");
+  assert.equal(D.classifyFailure('const fixture = "timed out after 15000ms waiting for runner spawn_ready";', { source: "command" }), null, "command output that merely quotes it is not evidence");
+  assert.equal(D.classifyFailure("helper_unknown_error: setup refresh had errors").code, "sandbox_setup_failed");
+  assert.equal(D.recordFailure("C:/x", { fingerprint: "f" }, { transient: true, source: "stderr" }), null, "never cached as project health");
+  assert.match(continuationPrompt({ autoResumes: [{ reason: "sandbox_spawn_timeout" }] }), /retry the tool call that failed/);
+  const base = { status: "blocked_runtime", threadId: "t", runtimeFailure: { code: "sandbox_spawn_timeout", transient: true } };
+  assert.equal(classifyTransientFailure(base), "sandbox_spawn_timeout");
+  assert.equal(classifyTransientFailure({ ...base, autoResumes: [{ reason: "sandbox_spawn_timeout" }] }), null, "at most once");
+  assert.equal(classifyTransientFailure({ ...base, threadId: null }), null);
+  assert.equal(classifyTransientFailure({ ...base, cancellationRequested: true }), null);
+  assert.equal(classifyTransientFailure({ ...base, runtimeFailure: { code: "sandbox_setup_failed" } }), null, "ACL setup failures are never replayed");
+  const role = buildWorkerPrompt({ prompt: "x", timeoutSeconds: 60 });
+  assert.match(role, /spawn_ready. is a transient runner start timeout/);
+  assert.match(role, /Git metadata is read-only for you/);
+});
+
+test("P1: an unseen folder gets the long first-run bound, and one probe timeout or runner timeout is retried", { skip: process.platform !== "win32" ? "Windows sandbox preflight only" : false }, async () => {
+  const control = path.join(F.root, "probe-control.json");
+  const mode = m => { fs.writeFileSync(control, JSON.stringify({ mode: m })); fs.rmSync(control + ".calls", { force: true }); };
+  assert.equal(D.probeBound({ firstRun: true, env: {} }), 180000);
+  assert.equal(D.probeBound({ firstRun: false, env: {} }), 60000);
+  await withEnv({ CODEX_TEAM_FAKE_PROBE: control, CODEX_TEAM_PROBE_TIMEOUT_MS: "1500" }, async () => {
+    mode("timeout-once");
+    const cwd = F.project(), binary = R.resolveCodex(), runtime = D.inspectRuntime(binary, cwd);
+    const first = D.probeRuntime(binary, runtime, cwd, { force: true, timeoutMs: 20000 });
+    assert.equal(first.status, "passed", JSON.stringify(first));
+    assert.equal(first.firstRun, true);
+    assert.deepEqual(first.attempts.map(a => a.outcome), ["timed_out", "passed"]);
+    const second = D.probeRuntime(binary, runtime, cwd, { force: true, timeoutMs: 20000 });
+    assert.equal(second.firstRun, false, "a folder set up once is warm");
+    assert.equal(D.probeRuntime(binary, runtime, cwd, { force: true, timeoutMs: 20000, thorough: true }).firstRun, true);
+    mode("spawn-once");
+    const other = F.project();
+    const third = D.probeRuntime(binary, runtime, other, { force: true, timeoutMs: 20000 });
+    assert.deepEqual(third.attempts.map(a => a.outcome), ["runner_start_timeout", "passed"]);
+    mode("spawn-always");
+    const stuck = F.project();
+    const blocked = D.probeRuntime(binary, runtime, stuck, { force: true, timeoutMs: 20000 });
+    assert.equal(blocked.status, "blocked");
+    assert.equal(blocked.failure.code, "sandbox_spawn_timeout");
+    assert.equal(D.health(stuck, runtime), null, "a transient runner failure blocks this job only");
+    mode("pass");
+  });
+});
+
+test("P1: a runner start timeout that stopped the worker resumes the same thread once; a recovered one is only noted", async () => {
+  await withEnv({ CODEX_TEAM_TEST_BACKOFF_MS: "50,50" }, async () => {
+    const cwd = F.project();
+    const job = F.start(cwd, { prompt: "SPAWN_TIMEOUT_STOP" });
+    const state = await settle(job);
+    assert.equal(state.status, "implementation_finished", JSON.stringify({ status: state.status, error: state.error, rf: state.runtimeFailure, ar: state.autoResumes }));
+    assert.equal(state.autoResumes.length, 1);
+    assert.equal(state.autoResumes[0].reason, "sandbox_spawn_timeout");
+    const captured = JSON.parse(fs.readFileSync(path.join(S.jobDir(job.jobId), "captured.json"), "utf8"));
+    assert.equal(captured.args[captured.args.indexOf("resume") + 1], "11111111-2222-3333-4444-555555555555");
+    assert.match(captured.prompt, /retry the tool call that failed/);
+    assert.equal(D.health(cwd, state.runtime), null, "project health is not poisoned");
+    const recovered = F.start(F.project(), { prompt: "SPAWN_TIMEOUT_RECOVERED WRITE_CODE" });
+    const done = await settle(recovered);
+    assert.equal(done.status, "implementation_finished");
+    assert.equal(done.runtimeFailure, null);
+    assert.deepEqual({ count: done.sandboxSpawnTimeouts.count, recovered: done.sandboxSpawnTimeouts.recovered }, { count: 1, recovered: true });
+    assert.equal(done.autoResumes, undefined);
+  });
+});
+
+test("P1: a sandboxed check whose runner never started is run once more", async () => {
+  const cwd = F.project(), marker = path.join(F.root, "runner-" + randomUUID());
+  const script = `const fs=require("fs");const m=${JSON.stringify(marker)};if(!fs.existsSync(m)){fs.writeFileSync(m,"1");console.error("Error: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");process.exit(1)}`;
+  const job = F.start(cwd, { prompt: "WRITE_CODE", assignment: F.assignment({ verification: [{ id: "answer", allowInline: true, criteria: [0], command: process.execPath, args: ["-e", script], timeoutSeconds: 30 }] }) });
+  await F.done(job);
+  R.verifyJob({ cwd, jobId: job.jobId });
+  const state = await settle(job);
+  const check = state.verification.checks[0];
+  assert.equal(check.status, "passed", JSON.stringify(check));
+  assert.equal(check.attempts.length, 2);
+  assert.equal(check.attempts[0].sandboxRunnerStartTimeout, true);
 });
