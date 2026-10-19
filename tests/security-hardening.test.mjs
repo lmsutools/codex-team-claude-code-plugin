@@ -393,11 +393,21 @@ test("presentation-shortened hunks require per-file lead observations",()=>{
 });
 test("workers and reviewers get exact shell environment policy; their own auth is retained",()=>{
  process.env.OPENAI_TEST_AUTH="auth-fixture";
+ // 1.2.2: the exact policy also names the host's Rust toolchain homes (paths) when they are set.
+ const homes=Object.fromEntries(["CARGO_HOME","RUSTUP_HOME"].map(name=>[name,process.env[name]]));
  try {
-  const args=R.buildArgs({readOnly:false,profile:{passEnv:["ALLOWED_SECRET"]}},"report.json");
+  for(const name of Object.keys(homes)) delete process.env[name];
+  let args=R.buildArgs({readOnly:false,profile:{passEnv:["ALLOWED_SECRET"]}},"report.json");
   for(const item of shellEnvironmentPolicy(["ALLOWED_SECRET"])) assert.ok(args.includes(item));
   assert.ok(!args.join(" ").includes("auth-fixture"));
- } finally {delete process.env.OPENAI_TEST_AUTH;}
+  Object.assign(process.env,{CARGO_HOME:"C:/fixture/cargo",RUSTUP_HOME:"C:/fixture/rustup"});
+  args=R.buildArgs({readOnly:false,profile:{passEnv:["ALLOWED_SECRET"]}},"report.json");
+  for(const item of shellEnvironmentPolicy(["ALLOWED_SECRET","CARGO_HOME","RUSTUP_HOME"])) assert.ok(args.includes(item));
+  assert.ok(!args.join(" ").includes("auth-fixture"));
+ } finally {
+  delete process.env.OPENAI_TEST_AUTH;
+  for(const [name,value] of Object.entries(homes)) if(value===undefined) delete process.env[name]; else process.env[name]=value;
+ }
 });
 test("completed transcript catch-up clears incomplete and removes seven-day cache files",t=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),"transcript-prune-"));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
