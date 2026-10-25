@@ -1,5 +1,6 @@
 /** Pure recovery policy and final-turn diagnostics; model prose is not failure evidence. */
 import { classifyFailure } from "./diagnostics.mjs";
+import { enforced } from "./policy-core.mjs";
 const prohibited = /denied|not authorized|permission|contract|invalid structured|malformed|budget|secret|cancel|deadline|timed.out|database.*(?:locked|busy)|SQLITE_(?:BUSY|LOCKED)/i;
 const transport = /stream (?:disconnected|closed)|connection (?:reset|closed)|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|network (?:error|failure)|error sending request|failed to (?:fetch|connect)|rate.?limit|\b429\b/i;
 const http5xx = /\b(?:HTTP(?:\/\d(?:\.\d)?)?\s*[:=]?\s*|status(?:\s+code)?[\s:=]+)5\d\d\b|\b5\d\d\s+(?:Bad Gateway|Internal Server Error|Service Unavailable|Gateway Time(?:out|[- ]out)|HTTP Version Not Supported)\b/i;
@@ -37,6 +38,7 @@ function spawnTimeoutResumable(state, orphanAlive) {
   return !(state.autoResumes || []).some(r => r.reason === "sandbox_spawn_timeout");
 }
 export function classifyTransientFailure(state, { crashed = false, orphanAlive = false } = {}) {
+  if (state.secretFindings?.length && enforced(state.profile, "secrets")) return null;
   if (!crashed && spawnTimeoutResumable(state, orphanAlive)) return "sandbox_spawn_timeout";
   // A completed worker already recorded structured exclusions. Crash diagnostics
   // come only from stderr/worker-fault, never model or command events.jsonl text.

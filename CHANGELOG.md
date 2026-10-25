@@ -1,5 +1,11 @@
 # Changelog
 
+## Integration fixes
+
+- Runner-timeout recovery never resumes jobs with enforced secret findings. Failed checks quoting timeout diagnostics are not retried as sandbox startup failures.
+- Scout evidence recognizes the minimal documented PowerShell `foreach` read, while still requiring file content in its output.
+- Explicit service-tier validation re-reads CLI features so configuration changes and transient listing failures do not require restarting the plugin.
+
 ## 1.2.2 (2026-10-18)
 
 1.2.2 works with the latest Codex CLI and adds service tiers.

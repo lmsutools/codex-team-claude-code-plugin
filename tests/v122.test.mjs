@@ -157,6 +157,9 @@ test("P1: classification of runner start timeouts is narrow and transient", () =
   assert.match(continuationPrompt({ autoResumes: [{ reason: "sandbox_spawn_timeout" }] }), /retry the tool call that failed/);
   const base = { status: "blocked_runtime", threadId: "t", runtimeFailure: { code: "sandbox_spawn_timeout", transient: true } };
   assert.equal(classifyTransientFailure(base), "sandbox_spawn_timeout");
+  const secrets = { ...base, secretFindings: [{ kind: "secret" }], profile: { components: { secrets: { level: "enforce" } } } };
+  assert.equal(classifyTransientFailure(secrets), null, "a concurrent enforced secret finding must prevent replay");
+  assert.equal(classifyTransientFailure(secrets, { crashed: true }), null);
   assert.equal(classifyTransientFailure({ ...base, autoResumes: [{ reason: "sandbox_spawn_timeout" }] }), null, "at most once");
   assert.equal(classifyTransientFailure({ ...base, threadId: null }), null);
   assert.equal(classifyTransientFailure({ ...base, cancellationRequested: true }), null);
@@ -218,8 +221,9 @@ test("P1: a runner start timeout that stopped the worker resumes the same thread
 
 test("P1: a sandboxed check whose runner never started is run once more", async () => {
   const cwd = F.project(), marker = path.join(F.root, "runner-" + randomUUID());
-  const script = `const fs=require("fs");const m=${JSON.stringify(marker)};if(!fs.existsSync(m)){fs.writeFileSync(m,"1");console.error("Error: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");process.exit(1)}`;
-  const job = F.start(cwd, { prompt: "WRITE_CODE", assignment: F.assignment({ verification: [{ id: "answer", allowInline: true, criteria: [0], command: process.execPath, args: ["-e", script], timeoutSeconds: 30 }] }) });
+  const executed = marker + ".executed";
+  const script = `require("fs").appendFileSync(${JSON.stringify(executed)},"executed\\n")`;
+  const job = F.start(cwd, { prompt: "WRITE_CODE", assignment: F.assignment({ verification: [{ id: "answer", allowInline: true, criteria: [0], command: process.execPath, args: ["-e", script, "--", "--fake-runner-timeout-once=" + marker], timeoutSeconds: 30 }] }) });
   await F.done(job);
   R.verifyJob({ cwd, jobId: job.jobId });
   const state = await settle(job);
@@ -227,9 +231,22 @@ test("P1: a sandboxed check whose runner never started is run once more", async 
   assert.equal(check.status, "passed", JSON.stringify(check));
   assert.equal(check.attempts.length, 2);
   assert.equal(check.attempts[0].sandboxRunnerStartTimeout, true);
+  assert.equal(fs.readFileSync(executed, "utf8"), "executed\n", "the failed launcher attempt never executes the check");
 });
 
 // ── P4: Git configuration observations in linked worktrees ──
+
+test("P1: failed checks quoting a runner timeout are not replayed", async () => {
+  const cwd = F.project();
+  const script = 'console.error("Assertion failed: expected spawn_ready from runner");process.exit(1)';
+  const job = F.start(cwd, { prompt: "WRITE_CODE", assignment: F.assignment({ verification: [{ id: "answer", allowInline: true, criteria: [0], command: process.execPath, args: ["-e", script], timeoutSeconds: 30 }] }) });
+  await F.done(job);
+  R.verifyJob({ cwd, jobId: job.jobId });
+  const state = await settle(job), check = state.verification.checks[0];
+  assert.equal(check.status, "failed");
+  assert.equal(check.attempts.length, 1);
+  assert.equal(check.attempts[0].sandboxRunnerStartTimeout, undefined);
+});
 
 test("P4: sibling branch-tracking entries and injected GIT_CONFIG_* never count as a configuration change", () => {
   const main = F.project(), linked = path.join(F.root, "linked-" + randomUUID().slice(0, 8));
@@ -343,6 +360,21 @@ test("P6: a sandboxed check that fails like offline cargo carries a toolchain hi
 });
 
 // ── P7: service tiers ──
+
+test("P7: tier validation observes configuration changes and recovers from feature-list failures", () => {
+  const binary = { command: process.execPath, prefix: ["feature-cache-regression"] };
+  let mode = "failed";
+  const run = (_command, args) => args.includes("--version") ? { status: 0, stdout: "codex-cli test" }
+    : mode === "failed" ? { status: 1, stderr: "temporary failure" }
+    : { status: 0, stdout: `ultrafast_mode experimental ${mode === "enabled"}\n` };
+  assert.throws(() => assertTierSupported("ultrafast", binary, { run }), /cannot be confirmed/);
+  mode = "disabled";
+  assert.throws(() => assertTierSupported("ultrafast", binary, { run }), /is disabled/);
+  mode = "enabled";
+  assert.equal(assertTierSupported("ultrafast", binary, { run }).checked, true);
+  mode = "disabled";
+  assert.throws(() => assertTierSupported("ultrafast", binary, { run }), /is disabled/);
+});
 
 test("P7: serviceTier is validated, passed as -c service_tier, inherited by revisions and shown everywhere", async () => {
   resetFeatureCache();
@@ -595,6 +627,12 @@ test("P8: scouts reading through a PowerShell literal list earn evidence only wh
   const event = output => ({ type: "item.completed", item: { type: "command_execution", command, status: "completed", exit_code: 0, aggregated_output: output } });
   assert.deepEqual([...fileReads([event("FILE existing.txt\n   1: Baseline input\nFILE answer.mjs\n")], ["existing.txt", "answer.mjs"], cwd)], ["existing.txt"]);
   assert.deepEqual([...fileReads([event("FILE existing.txt\n   1: something else\n")], ["existing.txt"], cwd)], [], "an indirect read needs the content in the output");
+  for (const simple of ["$paths = @('existing.txt'); foreach ($path in $paths) { Get-Content -LiteralPath $path }", "$p = 'existing.txt'; Get-Content -LiteralPath $p"]) {
+    const read = event("Baseline input\n"); read.item.command = simple;
+    assert.deepEqual([...fileReads([read], ["existing.txt"], cwd)], ["existing.txt"], simple);
+    read.item.aggregated_output = "different output";
+    assert.deepEqual([...fileReads([read], ["existing.txt"], cwd)], [], "a minimal loop still requires content evidence");
+  }
   const vars = new Map();
   bindSegment(vars, "$p = 'a.mjs'"); bindSegment(vars, "$p = 'b.mjs', 'c.mjs'"); bindSegment(vars, "foreach ($x in $p) {");
   assert.deepEqual(resolveArguments(vars, ["-LiteralPath", "$x", "$p", "$unknown"]), ["b.mjs", "c.mjs", "b.mjs", "c.mjs"]);

@@ -24,12 +24,8 @@ export function validateTier(value) {
   if (!SERVICE_TIERS.includes(value)) throw Error("serviceTier must be default, fast, priority or ultrafast.");
   return value;
 }
-const stamp = file => { try { const s = fs.statSync(file); return [file, s.size, s.mtimeMs]; } catch { return [file]; } };
-const featureCache = new Map();
-/** `codex features list` for the selected executable, cached per binary identity. */
+/** Read effective features each time: configuration can change without a binary update. */
 export function cliFeatures(binary, { run = spawnSync } = {}) {
-  const key = JSON.stringify([binary.command, ...(binary.prefix || [])].map(stamp));
-  if (featureCache.has(key)) return featureCache.get(key);
   const options = { encoding: "utf8", windowsHide: true, timeout: 20000, maxBuffer: 1048576 };
   const version = run(binary.command, [...(binary.prefix || []), "--version"], options);
   const listing = run(binary.command, [...(binary.prefix || []), "features", "list"], options);
@@ -47,7 +43,6 @@ export function cliFeatures(binary, { run = spawnSync } = {}) {
     features: features || new Map(),
     error: features?.size ? null : String(listing.error?.message || listing.stderr || "no feature list").trim().slice(0, 300),
   };
-  featureCache.set(key, value);
   return value;
 }
 /** Throws a clear error when the selected CLI cannot honor an explicit tier. */
@@ -135,5 +130,5 @@ export function tierShort(state) {
   if (tier.source === "none") return null;
   return tier.omitted ? `${tier.requested}→default (omitted)` : tier.effective + (tier.source === "config" ? " (config)" : "");
 }
-/** Tests swap CLI fixtures without changing the binary; production keeps the per-process cache. */
-export function resetFeatureCache() { featureCache.clear(); }
+/** Compatibility export for callers that previously cleared the feature cache. */
+export function resetFeatureCache() {}

@@ -33,6 +33,12 @@ if (args.includes("--help")) {
 if (args[0] === "sandbox") {
   if (args.includes("sandbox_workspace_write.network_access=false")) {
     const command = args.slice(args.indexOf("--") + 1);
+    const timeoutMarker = command.find(arg => arg.startsWith("--fake-runner-timeout-once="))?.slice("--fake-runner-timeout-once=".length);
+    if (timeoutMarker && !fs.existsSync(timeoutMarker)) {
+      fs.writeFileSync(timeoutMarker, "1");
+      console.error("Error: windows sandbox failed: timed out after 15000ms waiting for runner spawn_ready");
+      process.exit(1);
+    }
     console.error("FAKE_SANDBOX " + JSON.stringify({ args, env: Object.keys(process.env).sort() }));
     const child = spawn(command[0], command.slice(1), { stdio: "inherit", env: process.env, windowsHide: true });
     child.on("error", error => { console.error(error.message); process.exit(1); });

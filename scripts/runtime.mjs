@@ -2021,7 +2021,7 @@ async function worker(jobId, verification = false) {
             errorFile: stderrPath,
             timeoutSeconds: spec.timeoutSeconds,
           });
-          const runnerNotStarted = !spec.host && !result.stopReason && result.code !== 0 && D.SPAWN_TIMEOUT.test(tail(stderrPath));
+          const runnerNotStarted = !spec.host && !result.stopReason && result.code !== 0 && D.classifyFailure(tail(stderrPath), { source: "command" })?.code === "sandbox_spawn_timeout";
           attempts.push({ ...result, stdoutPath, stderrPath, ...(runnerNotStarted ? { sandboxRunnerStartTimeout: true } : {}) });
           if (runnerNotStarted && !spawnRetries) { spawnRetries = 1; continue; }
           if (result.stopReason !== "timed_out") break;

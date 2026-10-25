@@ -52,7 +52,7 @@ function segments(text) {
     if(c==='#' && (i===0 || /\s/.test(text[i-1]))) {
       parts.push(text.slice(start,i));const next=text.indexOf('\n',i);if(next<0)return parts;i=next;start=i+1;continue;
     }
-    if(c===';' || c==='|' || c==='\n' || (c==='&' && text[i+1]==='&')) {
+    if(c===';' || c==='|' || c==='\n' || (c==='{' && /^\s*foreach\s*\(/i.test(text.slice(start,i))) || c==='}' || (c==='&' && text[i+1]==='&')) {
       parts.push(text.slice(start,i));if(text[i+1]===c)i++;start=i+1;
     }
   }
