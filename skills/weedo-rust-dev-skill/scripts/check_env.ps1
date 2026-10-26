@@ -12,7 +12,11 @@ $cores = [Environment]::ProcessorCount
 $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB)
 Info "$($os.Caption) $($os.Version), $($cpu.Name)"
 Info "logical cores: $cores, RAM: $ramGB GB"
-if ($ramGB / [math]::Max($cores,1) -lt 2) { Warn "< 2 GB RAM per core: consider build.jobs = $([math]::Floor($ramGB/2)) in .cargo/config.toml" }
+if ($ramGB -le 8) {
+  Warn "Low-memory host ($ramGB GB RAM): cap CARGO_BUILD_JOBS=2 (or 3), set rust-analyzer.numThreads=2, use debug=false in [profile.dev], and run at most 1-2 parallel codex_batch worktrees (see build-performance.md §12)"
+} elseif ($ramGB -le 16 -or ($ramGB / [math]::Max($cores,1)) -lt 2) {
+  Warn "Memory-constrained ratio ($ramGB GB RAM / $cores cores): consider build.jobs = $([math]::Floor($ramGB/2)) in .cargo\config.toml and cap parallel codex_batch worktrees to 2-3 (see build-performance.md §12)"
+}
 
 $drive = (Get-Item .).PSDrive
 $freeGB = [math]::Round($drive.Free / 1GB)

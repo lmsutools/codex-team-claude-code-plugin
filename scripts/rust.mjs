@@ -7,6 +7,7 @@
  * summaries are untrusted text (see untrusted-output.mjs: "rust").
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -198,11 +199,20 @@ export function rustReadiness(cwd, spawn, environment = process.env) {
   const advice = [];
   if (!offline.ok) advice.push("Dependencies are not all available offline. Checks run with network off: run `cargo fetch --locked` on the host (an owner-authorized download), then verify again. " + (offline.err ? "cargo said: " + offline.err : ""));
   if (environment.CARGO_TARGET_DIR) advice.push("CARGO_TARGET_DIR is set: job worktrees share that directory, so concurrent jobs serialize on its lock and warm targets are skipped.");
+  const totalGiB = Math.round(os.totalmem() / (1024 ** 3));
+  const cores = Math.max(1, os.cpus()?.length || 1);
+  const gibPerCore = Number((totalGiB / cores).toFixed(1));
+  const lowMemory = totalGiB <= 12 || gibPerCore < 1.5;
+  if (lowMemory) {
+    const recJobs = Math.max(2, Math.floor(totalGiB / 2.5));
+    advice.push(`Low-memory host (${totalGiB} GiB RAM across ${cores} cores): set CARGO_BUILD_JOBS=${recJobs} (or build.jobs=${recJobs} in .cargo/config.toml) and cap parallel codex_batch worktrees to 1-2 to prevent linker OOM/swap thrashing.`);
+  }
   return {
     cargo: cargo.out,
     offlineDependencies: offline.ok ? "ready" : "missing",
     nextest: nextest.ok ? nextest.out.split(/\r?\n/)[0] : "not installed (template uses cargo test; examples/rust swaps in nextest)",
     warmTarget: { mode: environment.CODEX_TEAM_WARM_TARGET || "clone", targetPresent: fs.existsSync(path.join(cwd, "target")) },
+    memory: { totalGiB, cores, gibPerCore, lowMemory, recommendedJobs: Math.max(2, Math.floor(totalGiB / 2.5)) },
     profileTemplate: "Use \"extends\": \"rust\" in .codex-team/profile.json for fmt, clippy and tests on affected packages.",
     ...(advice.length ? { advice } : {}),
   };

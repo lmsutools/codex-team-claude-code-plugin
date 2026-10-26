@@ -17,7 +17,11 @@ else
   CORES=$(nproc); RAM_GB=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 ))
 fi
 info "cores: $CORES, RAM: ${RAM_GB} GB ($(( RAM_GB / (CORES>0?CORES:1) )) GB/core)"
-[ $(( RAM_GB / (CORES>0?CORES:1) )) -lt 2 ] && warn "< 2 GB RAM per core: consider build.jobs = $(( RAM_GB / 2 )) in .cargo/config.toml"
+if [ "$RAM_GB" -le 8 ]; then
+  warn "Low-memory host (${RAM_GB} GB RAM): cap CARGO_BUILD_JOBS=2 (or 3), set rust-analyzer.numThreads=2 + CARGO_BUILD_JOBS=2, use debug=false in [profile.dev], and run at most 1-2 parallel codex_batch worktrees (see build-performance.md §12)"
+elif [ "$RAM_GB" -le 16 ] || [ $(( RAM_GB / (CORES>0?CORES:1) )) -lt 2 ]; then
+  warn "Memory-constrained ratio (${RAM_GB} GB RAM / ${CORES} cores): consider CARGO_BUILD_JOBS=$(( RAM_GB / 2 )) during full-workspace or -Zthreads builds, and cap parallel codex_batch worktrees to 2-3 (see build-performance.md §12)"
+fi
 
 FREE_GB=$(df -Pk . | awk 'NR==2{print int($4/1048576)}')
 if [ "$FREE_GB" -lt 20 ]; then warn "free disk here: ${FREE_GB} GB. Large workspaces need 5-20 GB per target dir. Don't run benchmarks."
@@ -39,7 +43,7 @@ else
 fi
 command -v cargo >/dev/null 2>&1 && ok "$(cargo --version)" || warn "cargo not found"
 command -v rustc >/dev/null 2>&1 && ok "$(rustc --version)"
-for t in cargo-nextest cargo-deny cargo-shear cargo-llvm-lines sccache cargo-xwin; do
+for t in cargo-nextest cargo-deny cargo-shear cargo-llvm-lines sccache cargo-xwin cargo-zigbuild; do
   if command -v "$t" >/dev/null 2>&1; then ok "$t"; else info "$t not installed (cargo binstall $t)"; fi
 done
 

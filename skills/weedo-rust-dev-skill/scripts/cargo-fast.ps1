@@ -12,8 +12,16 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
+$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+$ramGB = if ($os) { [math]::Round($os.TotalVisibleMemorySize / 1MB) } else { 16 }
+$defThreads = if ($ramGB -le 8) { "2" } elseif ($ramGB -le 16) { "4" } else { "8" }
+if (-not $env:CARGO_BUILD_JOBS) {
+  if ($ramGB -le 8) { $env:CARGO_BUILD_JOBS = "2" }
+  elseif ($ramGB -le 16) { $env:CARGO_BUILD_JOBS = [string][math]::Max(2, [math]::Floor($ramGB / 3)) }
+}
+
 $tc = if ($env:FAST_NIGHTLY) { $env:FAST_NIGHTLY } else { "nightly" }
-$threads = if ($env:FAST_THREADS) { $env:FAST_THREADS } else { "8" }
+$threads = if ($env:FAST_THREADS) { $env:FAST_THREADS } else { $defThreads }
 $cranelift = if ($env:FAST_CRANELIFT) { $env:FAST_CRANELIFT } else { "1" }
 
 & rustup run $tc rustc --version *> $null

@@ -11,9 +11,25 @@
 # NOTE: on macOS/Windows Cranelift has no unwinding (panics abort), so `test` uses LLVM.
 set -euo pipefail
 
+if [ "$(uname -s)" = Darwin ]; then
+  RAM_GB=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 17179869184) / 1073741824 ))
+else
+  RAM_GB=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || echo 16777216) / 1048576 ))
+fi
+if [ "$RAM_GB" -le 8 ]; then
+  DEF_THREADS=2; DEF_JOBS=2
+elif [ "$RAM_GB" -le 16 ]; then
+  DEF_THREADS=4; DEF_JOBS=$(( RAM_GB / 3 ))
+else
+  DEF_THREADS=8; DEF_JOBS=""
+fi
+
 TC="${FAST_NIGHTLY:-nightly}"
-THREADS="${FAST_THREADS:-8}"
+THREADS="${FAST_THREADS:-$DEF_THREADS}"
 CRANELIFT="${FAST_CRANELIFT:-1}"
+if [ -z "${CARGO_BUILD_JOBS:-}" ] && [ -n "$DEF_JOBS" ]; then
+  export CARGO_BUILD_JOBS="$DEF_JOBS"
+fi
 SUB="${1:-build}"; shift || true
 
 if ! rustup run "$TC" rustc --version >/dev/null 2>&1; then

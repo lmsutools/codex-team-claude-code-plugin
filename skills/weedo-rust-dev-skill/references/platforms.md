@@ -119,5 +119,46 @@ then a playbook, not a rewrite.
 | Dioxus desktop | React-like (RSX) | Medium | Pairs with Subsecond hot-patching (`dx serve --hotpatch`) |
 | gpui | GPU, Zed's framework | Large | High performance. API still moving. |
 
+---
+
+## 8. Building for Windows, macOS & Linux from a Single Mac
+
+An Apple Silicon Mac can type-check, lint, and cross-compile for all three OSes locally
+without waiting on CI:
+
+1. **Instant Cross-Target Type & Lint Check (Zero Linker / Zero SDK Needed):**
+   `cargo check` and `cargo clippy` do **not** invoke a linker. With target triples in
+   `rust-toolchain.toml`, run these directly on macOS in 1–2 seconds:
+   ```bash
+   cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+   cargo clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings
+   ```
+2. **Pure-Rust Dependency Rule (Eliminates 95% of C Cross-Toolchain Failures):**
+   - Always select **`rustls`** instead of `native-tls` / `openssl-sys` (in `reqwest`,
+     `sqlx`, `tokio-tungstenite`, `tonic`).
+   - If using SQLite (`rusqlite`) or compression (`zstd`), enable `bundled` only when pure
+     Rust alternatives aren't used, and keep C `-sys` crates isolated in one adapter crate.
+3. **Cross-Compiling Real Windows (`.exe`) and Linux (ELF) Binaries on macOS:**
+   - **Mac → Windows (`.exe`):**
+     ```bash
+     brew install llvm && cargo install cargo-xwin
+     cargo xwin build --release --target x86_64-pc-windows-msvc
+     ```
+     `cargo-xwin` caches the official Microsoft CRT/SDK headers locally and links `.exe`
+     binaries using `lld-link`.
+   - **Mac → Linux (ELF):**
+     ```bash
+     brew install zig && cargo install cargo-zigbuild
+     cargo zigbuild --release --target x86_64-unknown-linux-gnu
+     cargo zigbuild --release --target aarch64-unknown-linux-gnu
+     ```
+     `cargo-zigbuild` uses Zig as a zero-config cross C compiler and linker.
+4. **Running Foreign Tests Locally on Apple Silicon (When Needed Before CI):**
+   - **Linux:** Use **OrbStack** (or Docker Desktop) — `linux/arm64` containers run at
+     near-native M-series CPU speed.
+   - **Windows:** Use **UTM** (free) or **Parallels** with Windows 11 ARM64, which runs
+     both `aarch64-pc-windows-msvc` and `x86_64-pc-windows-msvc` binaries built by
+     `cargo xwin`.
+
 Keep the GUI framework in the bin crate (or one `ui` crate) only, so UI dependency
 churn doesn't rebuild the rest of the workspace.

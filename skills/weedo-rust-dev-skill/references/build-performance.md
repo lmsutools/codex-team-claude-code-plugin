@@ -345,3 +345,56 @@ changes require a restart.
 - Build each target triple as its own job, concurrently, on separate machines or target
   dirs (see remote-vm-builds.md).
 - PGO/BOLT (`cargo-pgo`) for the final few % of runtime. Do it in CI, never locally.
+
+---
+
+## 12. Low-Memory Dev Machines (8 GB – 16 GB RAM on macOS, Windows, Linux)
+
+Rust compilation and linking are RAM-hungry: each parallel `rustc` process + LLVM codegen
+unit + `rust-analyzer` + linker (`ld`/`lld`/`mold`) competes for physical memory. On an
+**8 GB or 16 GB machine** (or `< 2 GB RAM per logical core`), unthrottled builds trigger
+macOS swap compression slowdowns, Linux OOM-kills (`SIGKILL` / exit 137), or Windows
+pagefile thrashing.
+
+Apply this **Low-RAM Survival Profile** whenever total RAM is $\le 16\text{ GB}$ or
+$\text{RAM} / \text{cores} < 2\text{ GB}$:
+
+### 1. Cap Cargo Concurrency (`build.jobs` / `CARGO_BUILD_JOBS`)
+Rule of thumb: $\text{max jobs} = \max(2, \lfloor \text{Total RAM GB} / 2.5 \rfloor)$:
+- **8 GB RAM (Mac / Windows / Linux):** `CARGO_BUILD_JOBS=3` (or `2` while IDE is open).
+- **12–16 GB RAM:** `CARGO_BUILD_JOBS=5` (or `6`).
+- `scripts/cargo-fast.sh` and `scripts/cargo-fast.ps1` auto-scale `FAST_THREADS` and
+  `CARGO_BUILD_JOBS` down on $\le 16\text{ GB}$ machines so `-Zthreads` never multiplies
+  past physical RAM.
+
+### 2. Tame `rust-analyzer` (Saves 2–4 GB of Idle RAM)
+`rust-analyzer` spawns its own proc-macro server and runs `cargo check` on every save. On
+8–16 GB machines, add to `.vscode/settings.json` (or Zed settings):
+```json
+{
+  "rust-analyzer.cargo.targetDir": true,
+  "rust-analyzer.numThreads": 2,
+  "rust-analyzer.cargo.extraEnv": { "CARGO_BUILD_JOBS": "2" },
+  "rust-analyzer.lru.capacity": 64
+}
+```
+On **8 GB machines**, either close the IDE during heavy full-workspace builds or set
+`"rust-analyzer.checkOnSave": false` and run `cargo check -p <crate>` on demand.
+
+### 3. Shrink Linker & Codegen Peak RSS
+- **Debug info:** On **8 GB machines**, set `[profile.dev] debug = false` (saves 30–40%
+  linker memory even beyond `line-tables-only`). On **16 GB machines**, keep
+  `debug = "line-tables-only"` and `debug = false` on dependencies.
+- **Never run `lto = "fat"` locally:** Fat LTO loads the entire workspace bitcode into a
+  single process (6–12+ GB RSS). Keep `lto = "fat"` in `[profile.dist]` for CI only.
+- **Linux linker:** Never use default GNU `ld.bfd` on low-RAM Linux — it easily OOMs on
+  debug/test binaries. Use `rust-lld` (default on x86_64 since 1.90) or `mold` with
+  `--thread-count=2`.
+- **Windows linker:** Use `rust-lld.exe` and ensure Windows pagefile is system-managed on
+  an NVMe SSD.
+
+### 4. Cap Test & Multi-Agent Worktree Parallelism
+- **Nextest:** Pass `cargo nextest run -j 4` (on 16 GB) or `-j 2` (on 8 GB) so 10 test
+  binaries don't allocate large buffers simultaneously.
+- **`codex_batch` parallel workers:** On an 8 GB machine, run at most **1–2** concurrent
+  Rust worktree jobs; on 16 GB, at most **2–3**, with `CARGO_BUILD_JOBS` capped.
