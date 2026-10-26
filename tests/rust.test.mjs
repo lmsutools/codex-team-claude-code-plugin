@@ -436,3 +436,34 @@ test("checkRustArchitecture passes scaffolded workspaces and catches feature-thr
   assert.equal(afterNew.newViolations[0].rule, "arch::platform_cfg_isolation");
   assert.equal(afterNew.newViolations[0].file, "crates/store-memory/src/lib.rs");
 });
+
+test("warmTarget skips rust-analyzer, release, dist, and .cargo-lock while cloning debug, and affectedPackages selects workspace on .config/nextest.toml or .sqlx/", () => {
+  const repo = tmp("warm-selective"), wt = tmp("warm-selective-wt");
+  fs.writeFileSync(path.join(repo, "Cargo.toml"), "[workspace]\n");
+  fs.writeFileSync(path.join(wt, "Cargo.toml"), "[workspace]\n");
+  fs.mkdirSync(path.join(repo, "target/debug/deps"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "target/rust-analyzer/debug"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "target/release"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "target/.cargo-lock"), "locked");
+  fs.writeFileSync(path.join(repo, "target/.rustc_info.json"), "{}");
+  fs.writeFileSync(path.join(repo, "target/debug/deps/libfoo.rlib"), "artifact");
+  fs.writeFileSync(path.join(repo, "target/rust-analyzer/debug/ra.rlib"), "ide-only");
+  fs.writeFileSync(path.join(repo, "target/release/app"), "rel-only");
+
+  const res = warmTarget(repo, wt, "copy");
+  assert.equal(res.status, "copied");
+  assert.ok(fs.existsSync(path.join(wt, "target/debug/deps/libfoo.rlib")));
+  assert.ok(fs.existsSync(path.join(wt, "target/.rustc_info.json")));
+  assert.ok(!fs.existsSync(path.join(wt, "target/rust-analyzer")), "must skip target/rust-analyzer");
+  assert.ok(!fs.existsSync(path.join(wt, "target/release")), "must skip target/release");
+  assert.ok(!fs.existsSync(path.join(wt, "target/.cargo-lock")), "must skip target/.cargo-lock");
+
+  const meta = {
+    workspace_root: "/ws",
+    workspace_members: ["a 0.1.0"],
+    packages: [{ id: "a 0.1.0", name: "a", manifest_path: "/ws/crates/a/Cargo.toml", dependencies: [] }],
+  };
+  assert.equal(affectedPackages(meta, [".config/nextest.toml"], "/ws").mode, "workspace");
+  assert.equal(affectedPackages(meta, [".sqlx/query-123.json"], "/ws").mode, "workspace");
+  assert.equal(affectedPackages(meta, ["proto/service.proto"], "/ws").mode, "workspace");
+});

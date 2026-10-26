@@ -48,8 +48,12 @@ function relative(file, cwd) {
   if (!file) return file;
   const clean = file.replaceAll("\\", "/");
   if (cwd && path.isAbsolute(file)) {
-    const rel = path.relative(cwd, file).replaceAll("\\", "/");
-    if (!rel.startsWith("..")) return rel;
+    for (const base of [cwd, real(cwd)]) {
+      for (const target of [file, real(file)]) {
+        const rel = path.relative(base, target).replaceAll("\\", "/");
+        if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;
+      }
+    }
   }
   return clean;
 }
@@ -112,7 +116,20 @@ export function rustDiagnostics(text, cwd) {
 }
 
 // ------------------------------------------------------------ crate selection
-const GLOBAL = [/^Cargo\.lock$/, /^Cargo\.toml$/, /^\.cargo\//, /^rust-toolchain(?:\.toml)?$/, /^clippy\.toml$/, /^\.clippy\.toml$/, /^rustfmt\.toml$/, /^\.rustfmt\.toml$/, /^deny\.toml$/];
+const GLOBAL = [
+  /^Cargo\.lock$/,
+  /^Cargo\.toml$/,
+  /^\.cargo\//,
+  /^rust-toolchain(?:\.toml)?$/,
+  /^clippy\.toml$/,
+  /^\.clippy\.toml$/,
+  /^rustfmt\.toml$/,
+  /^\.rustfmt\.toml$/,
+  /^deny\.toml$/,
+  /^(?:\.config\/)?nextest\.toml$/,
+  /^\.sqlx\//,
+  /^proto\//,
+];
 const real = p => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
 /**
  * Which workspace packages a change affects, from `cargo metadata --no-deps`
@@ -224,6 +241,12 @@ export function warmJobTarget(origin, worktree, git, mode = process.env.CODEX_TE
  * Never falls back to a byte copy unless mode === "copy": an unsupported
  * filesystem would otherwise copy gigabytes.
  */
+// Top-level target/ entries that worktree test/clippy checks never need (or must not inherit).
+// Skipping rust-analyzer/, release/, dist/, doc/, etc. avoids cloning & unlinking 100k+ unused inodes.
+const SKIP_WARM_ENTRIES = new Set([
+  ".cargo-lock", "rust-analyzer", "release", "dist", "doc", "package", "fast", "cargo-timings", "nextest", "tmp",
+]);
+
 export function warmTarget(repoRoot, worktree, mode = "clone") {
   const source = path.join(repoRoot, "target"), dest = path.join(worktree, "target");
   if (mode === "off") return { status: "off" };
@@ -233,14 +256,24 @@ export function warmTarget(repoRoot, worktree, mode = "clone") {
   try { stat = fs.lstatSync(source); } catch { return { status: "skipped", reason: "repository has no target/ yet" }; }
   if (!stat.isDirectory()) return { status: "skipped", reason: "target is not a directory" };
   if (fs.existsSync(dest)) return { status: "skipped", reason: "worktree already has target/" };
+  const entries = fs.readdirSync(source).filter(name => !SKIP_WARM_ENTRIES.has(name));
+  if (!entries.length) return { status: "skipped", reason: "target/ has no reusable dev/check artifacts" };
   const started = Date.now();
   if (mode === "clone" && process.platform === "darwin") {
     // Node's COPYFILE_FICLONE_FORCE is ENOSYS on macOS even on APFS; clonefile(2)
     // through /bin/cp -c is the supported path and fails instead of copying.
-    const r = spawnSync("/bin/cp", ["-c", "-R", source, dest], { encoding: "utf8", timeout: 600000 });
-    if (r.status !== 0) {
-      fs.rmSync(dest, { recursive: true, force: true });
-      return { status: "skipped", reason: "filesystem does not support copy-on-write clones (" + String(r.stderr || r.error?.message || "cp -c failed").trim().slice(0, 200) + "); CODEX_TEAM_WARM_TARGET=copy forces a full copy" };
+    fs.mkdirSync(dest, { recursive: true });
+    for (const name of entries) {
+      const srcEntry = path.join(source, name), dstEntry = path.join(dest, name);
+      let r = spawnSync("/bin/cp", ["-c", "-R", srcEntry, dstEntry], { encoding: "utf8", timeout: 600000 });
+      if (r.status !== 0 && /No such file/i.test(String(r.stderr || ""))) {
+        fs.rmSync(dstEntry, { recursive: true, force: true });
+        r = spawnSync("/bin/cp", ["-c", "-R", srcEntry, dstEntry], { encoding: "utf8", timeout: 600000 });
+      }
+      if (r.status !== 0) {
+        fs.rmSync(dest, { recursive: true, force: true });
+        return { status: "skipped", reason: "filesystem does not support copy-on-write clones (" + String(r.stderr || r.error?.message || "cp -c failed").trim().slice(0, 200) + "); CODEX_TEAM_WARM_TARGET=copy forces a full copy" };
+      }
     }
     return { status: "cloned", durationMs: Date.now() - started };
   }
@@ -256,7 +289,15 @@ export function warmTarget(repoRoot, worktree, mode = "clone") {
     finally { fs.rmSync(probeDest, { force: true }); }
   }
   try {
-    fs.cpSync(source, dest, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true, mode: mode === "clone" ? fs.constants.COPYFILE_FICLONE_FORCE : fs.constants.COPYFILE_FICLONE });
+    fs.mkdirSync(dest, { recursive: true });
+    for (const name of entries) {
+      fs.cpSync(path.join(source, name), path.join(dest, name), {
+        recursive: true,
+        preserveTimestamps: true,
+        verbatimSymlinks: true,
+        mode: mode === "clone" ? fs.constants.COPYFILE_FICLONE_FORCE : fs.constants.COPYFILE_FICLONE,
+      });
+    }
   } catch (e) {
     fs.rmSync(dest, { recursive: true, force: true });
     return { status: "failed", reason: String(e.message || e).slice(0, 300) };

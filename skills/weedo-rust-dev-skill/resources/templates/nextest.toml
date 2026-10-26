@@ -2,11 +2,22 @@
 
 [profile.default]
 slow-timeout = { period = "30s", terminate-after = 4 }
+leak-timeout = "200ms"
+failure-output = "immediate-final"
+status-level = "fail"
+final-status-level = "fail"
+
+# Prevent heavy E2E / DB migration tests from starving CPU/RAM when running alongside unit tests
+[[profile.default.overrides]]
+filter = 'test(/e2e|heavy|migration/)'
+threads-required = 2
 
 [profile.ci]
 fail-fast = false
 retries = 2
 slow-timeout = { period = "60s", terminate-after = 5 }
+leak-timeout = "500ms"
+failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"

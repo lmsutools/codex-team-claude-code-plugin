@@ -62,6 +62,10 @@ debug = "line-tables-only"     # file:line backtraces; far less to generate and 
 debug = false
 # opt-level = 1                # uncomment if dev binaries are too slow at runtime
 
+[profile.dev.build-override]   # proc-macros (serde, tokio, sqlx, thiserror) + build.rs
+opt-level = 3                  # 3-5x faster macro expansion & build.rs execution; compiled once and cached
+debug = false
+
 [profile.debugging]            # real debugger sessions: cargo build --profile debugging
 inherits = "dev"
 debug = true
