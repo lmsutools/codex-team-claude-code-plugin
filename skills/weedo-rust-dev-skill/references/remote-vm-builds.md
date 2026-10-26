@@ -150,12 +150,63 @@ On the VM, after a clean build:
 - Compare cost per build (VM price per hour × wall time) against developer time saved.
   Shut down idle VMs automatically.
 
+---
+
+## Step 7: Zero-Waste VM Rules (Never Burn VM Hours While the Local LLM Reviews)
+
+When using multi-agent orchestration (Claude / Antigravity / Codex Reviewer), the **biggest
+cost trap** is leaving a 32-core Linux VM running while the LLM spends 5–20 minutes
+planning, reading diffs, building decision packets, or waiting for human approval.
+
+Enforce these **three zero-waste rules**:
+
+### Rule 1: Strict Phase Separation (When the VM Is Allowed to Be ON)
+
+| Workflow Phase | Where It Runs | Remote Linux VM State |
+| :--- | :--- | :--- |
+| **1. Architecture, Planning, Scouting & Q&A** | Local Mac | **OFF (\$0/hr)** |
+| **2. Single-Crate TDD & Worker Edits (`cargo check/test -p <crate>`)** | Local Mac (with APFS CoW `warmTarget`) | **OFF (\$0/hr)** |
+| **3. Heavy Multi-Target Burst (`--workspace` tests, `cargo-xwin`, `cargo-zigbuild`, clean release)** | **Remote Linux VM** (batched back-to-back) | **ON for 1–3 mins only** |
+| **4. LLM Code Review, Decision Packet & User Approval** | Local Mac | **OFF (\$0/hr — powered down before review starts)** |
+
+### Rule 2: "Burst, Fetch, and Power Off Before Review" (`--poweroff`)
+Whenever the agent runs a heavy remote verification or release build before entering a
+review/decision phase, pass `--poweroff` to [`remote_build.sh`](../scripts/remote_build.sh):
+
+```bash
+# Syncs source -> runs 32-core burst -> fetches artifacts -> immediately powers off VM:
+scripts/remote_build.sh buildvm --poweroff \
+  --fetch 'target/x86_64-pc-windows-msvc/release/*.exe' \
+  -- xwin build --release --target x86_64-pc-windows-msvc
+```
+Because `--poweroff` triggers `systemctl poweroff` the second `rsync` finishes pulling the
+artifacts/logs back to your Mac, the VM is **already off** while the local brain LLM
+spends the next 10 minutes analyzing the logs and reviewing the diff.
+
+### Rule 3: Mandatory 15-Minute Dead-Man's Switch on Every Rented VM (`--install-watchdog`)
+Never rely on an agent or human remembering to shut down a VM. On the very first connection
+to any rented Linux VM, install the cron watchdog built into `remote_build.sh`:
+
+```bash
+scripts/remote_build.sh buildvm --install-watchdog 15
+```
+- Every minute, `/usr/local/bin/rust-vm-watchdog.sh` checks if any `cargo`, `rustc`,
+  `cargo-nextest`, `rust-lld`, `mold`, or `wild` process is running, or if
+  `/tmp/.remote-build-heartbeat` was touched within the last 15 minutes.
+- If your Mac goes to sleep, SSH drops, or the LLM gets stuck waiting on a prompt for 15
+  minutes, **the VM powers itself off automatically** (stopping compute billing on Hetzner
+  Cloud, AWS EC2, GCP, Azure, and Vultr when stopped/deallocated via cloud CLI or ACPI
+  poweroff).
+- *Provider caveat:* Confirm your cloud provider stops billing compute on OS `poweroff`
+  (AWS EC2 EBS-backed, GCP, Azure when deallocated; on Hetzner/DigitalOcean, pair with a
+  tiny cloud-API destroy/snapshot hook if the provider bills powered-off instances).
+
 ## Decision checklist (copy into the project plan)
 
 - [ ] `max useful cores` measured: ____
 - [ ] Critical-path crates identified and split (target: utilization > 60% on the VM)
-- [ ] VM: ____ vCPU, ____ GB RAM (≥ 2 GB/core), local NVMe / Dev Drive
-- [ ] Targets per machine: Linux VM (lint, test, Windows cross-build) · Windows VM/runner (native test) · Mac (build, sign, notarize)
+- [ ] VM: ____ vCPU, ____ GB RAM (≥ 2 GB/core), local NVMe (XFS/Btrfs) / Dev Drive
+- [ ] Targets per machine: Linux VM (lint, test, Windows `cargo-xwin` + `wine64`) · Mac (native macOS test, sign, notarize)
 - [ ] Cache: sccache + object storage, or a persistent disk
 - [ ] Workflow: A / B / C / D
-- [ ] Auto-shutdown + spot/preemptible
+- [ ] Dead-man's switch installed (`remote_build.sh <host> --install-watchdog 15`) + `--poweroff` used before LLM review phases

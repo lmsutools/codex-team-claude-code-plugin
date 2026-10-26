@@ -137,6 +137,11 @@ what to offload (the inner loop usually stays on a fast local machine) → size 
 box / remote build / build-once-test-many) → verify utilization > 60%.
 Tune `-Zthreads` on the VM with [zthreads_sweep.sh](scripts/zthreads_sweep.sh) instead
 of guessing (build-performance.md §7).
+- **Zero-waste VM rule (never pay for idle VMs during LLM review):** On first connect,
+  install the dead-man's switch (`scripts/remote_build.sh <host> --install-watchdog 15`)
+  so the VM powers off after 15m of zero `cargo`/`rustc` activity, and pass `--poweroff`
+  on pre-review bursts (`scripts/remote_build.sh <host> --poweroff ...`) so the VM shuts
+  down immediately before the local LLM begins reviewing logs/diffs.
 
 ## Workflow E: rescue / migrate an existing advanced Rust codebase (Brownfield)
 
