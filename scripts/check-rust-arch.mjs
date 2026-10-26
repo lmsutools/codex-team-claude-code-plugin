@@ -157,7 +157,7 @@ export function checkRustArchitecture(cwd = process.cwd(), { ignoreBaseline = fa
       }
       const hasAsyncFn = prodLines.some(l => !l.trim().startsWith("//") && ASYNC_FN_RE.test(l));
       let cfgReported = false, blockingReported = false, unboundedReported = false, secretReported = false;
-      let inDebugStruct = false;
+      let inDebugStruct = false, debugBraceOpen = false;
 
       for (let i = 0; i < prodLines.length; i++) {
         const line = prodLines[i];
@@ -194,17 +194,28 @@ export function checkRustArchitecture(cwd = process.cwd(), { ignoreBaseline = fa
             message: `unbounded_channel (${trimmed}) risks OOM under backpressure; use a bounded channel with explicit capacity`,
           });
         }
-        if (DERIVE_DEBUG_RE.test(line)) inDebugStruct = true;
-        else if (inDebugStruct && /^\s*\}/.test(line)) inDebugStruct = false;
-        else if (inDebugStruct && !secretReported && SECRET_FIELD_RE.test(line)) {
-          secretReported = true;
-          violations.push({
-            rule: "arch::no_unredacted_secrets",
-            file: rel(file),
-            line: i + 1,
-            column: 1,
-            message: `sensitive field (${trimmed}) inside a #[derive(Debug)] struct risks leaking secrets in logs/Sentry; use a redacted wrapper type or custom Debug impl`,
-          });
+        if (DERIVE_DEBUG_RE.test(line)) {
+          inDebugStruct = true;
+          debugBraceOpen = line.includes("{");
+        } else if (inDebugStruct) {
+          if (line.includes("{")) debugBraceOpen = true;
+          if (!debugBraceOpen && trimmed.endsWith(";")) {
+            // Unit or tuple struct (`pub struct Foo;` / `pub struct Id(u64);`) — no field block
+            inDebugStruct = false;
+          } else if (debugBraceOpen && !secretReported && SECRET_FIELD_RE.test(line)) {
+            secretReported = true;
+            violations.push({
+              rule: "arch::no_unredacted_secrets",
+              file: rel(file),
+              line: i + 1,
+              column: 1,
+              message: `sensitive field (${trimmed}) inside a #[derive(Debug)] struct risks leaking secrets in logs/Sentry; use a redacted wrapper type or custom Debug impl`,
+            });
+          }
+          if (debugBraceOpen && trimmed.includes("}")) {
+            inDebugStruct = false;
+            debugBraceOpen = false;
+          }
         }
       }
     }

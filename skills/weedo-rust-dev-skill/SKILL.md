@@ -1,14 +1,13 @@
 ---
 name: weedo-rust-dev-skill
 description: >-
-  Senior-level playbook for planning, scaffolding, and maintaining large-scale Rust
-  applications for Windows, macOS, and/or Linux with fast, multi-core-friendly builds.
-  Use this skill when the user starts or pre-plans a big Rust project, designs a Cargo
-  workspace or crate architecture, chooses target platforms, complains about slow Rust
-  compile/link/test times or a slow TDD loop, wants to use rented remote VMs or many-core machines for
-  builds, configures profiles/linkers/CI/caching, reviews Rust architecture for
-  borrow-checker or async pain at scale, or asks for modern (edition 2024, Rust 1.9x)
-  practices.
+  Senior-level playbook for planning, scaffolding, migrating (brownfield), and maintaining
+  large-scale Rust applications for Windows, macOS, and/or Linux with fast, multi-core-friendly
+  builds and multi-agent Golden Protocol orchestration. Use this skill when the user starts or
+  pre-plans a Rust project, rescues an existing brownfield Rust codebase, designs a Cargo
+  workspace or crate architecture, chooses target platforms or cross-compiles, complains about
+  slow Rust compile/link/test times or low-RAM dev machines, uses rented remote Linux VMs,
+  triages Sentry crashes, or runs parallel multi-agent Rust waves.
 ---
 
 # Weedo Rust Dev Skill
@@ -55,19 +54,20 @@ plan the two together.
      ```
      and toggle their Terminal / IDE on in **System Settings → Privacy & Security → Developer Tools** so Apple's `syspolicyd` stops scanning every newly linked Rust test and build-script binary on first run.
 
-## Choose the workflow
+## Choose the workflow & executable tool
 
-| Situation | Go to |
-| :-- | :-- |
-| New project / pre-planning | **Workflow A** |
-| Existing project builds slowly | **Workflow B** |
-| TDD / test loop is slow | [fast-tdd.md](references/fast-tdd.md) |
-| Using rented VMs / many-core machines | **Workflow D** → [remote-vm-builds.md](references/remote-vm-builds.md) |
-| Architecture or design review | **Workflow C** |
-| Adding an OS later | [platforms.md §4](references/platforms.md#4-expansion-playbook-my-clients-are-on-maclinux-now) |
-| Multi-agent parallel waves (`codex_batch`) / 9 Golden Laws | **Workflow F** → [golden-protocol.md](references/golden-protocol.md) |
-| CI, lints, supply chain, release | [tooling-and-ci.md](references/tooling-and-ci.md) |
-| Which language/ecosystem features to use | [modern-rust.md](references/modern-rust.md) |
+| Situation | Workflow / Reference | Executable Script to Run |
+| :-- | :-- | :-- |
+| New project / pre-planning | **Workflow A** → [architecture.md](references/architecture.md), [platforms.md](references/platforms.md) | `bash <skill>/scripts/scaffold_workspace.sh <name> [dir] --ship <os>` |
+| Existing project builds slowly or low RAM (8–16 GB) | **Workflow B** → [build-performance.md](references/build-performance.md) (§12 Low-RAM) | `bash <skill>/scripts/build_audit.sh` · `scripts/cargo-fast.sh` |
+| TDD / test loop is slow | [fast-tdd.md](references/fast-tdd.md) | `cargo check -p <crate> --tests` · `cargo nextest run -p <crate>` |
+| Architecture review or enforcing the 9 Golden Laws | **Workflow C** → [architecture.md §7](references/architecture.md), [golden-protocol.md §2](references/golden-protocol.md) | `node <skill>/scripts/check-rust-arch.mjs [cwd]` |
+| Rented Linux VMs / zero-waste idle VM protection | **Workflow D** → [remote-vm-builds.md](references/remote-vm-builds.md) (§7 Zero-Waste) | `scripts/remote_build.sh <host> --install-watchdog 15` / `--poweroff` |
+| Brownfield rescue of an advanced legacy codebase | **Workflow E** → [brownfield-migration.md](references/brownfield-migration.md) | `node <skill>/scripts/check-rust-arch.mjs . --plan` / `--write-baseline` |
+| Multi-agent parallel waves (`codex_batch` 3-Beat) | **Workflow F** → [golden-protocol.md](references/golden-protocol.md) | `node <skill>/scripts/rust-add-crate.mjs <name>` (Beat 1) |
+| Cross-compiling (Mac→Win/Linux, Linux→Win/Mac) | [platforms.md §4, §8, §9](references/platforms.md) | `cargo xwin test --target x86_64-pc-windows-msvc` · `cargo zigbuild` |
+| Telemetry, Sentry, BugSink, or crash triage | [telemetry-and-sentry.md](references/telemetry-and-sentry.md) | `node <plugin>/scripts/sentry-triage.mjs --issue <event.json>` |
+| CI, lints, supply chain, release, modern Rust 2024 | [tooling-and-ci.md](references/tooling-and-ci.md), [modern-rust.md](references/modern-rust.md) | `cargo deny check` · `cargo shear --fix` · `cargo mutants -p <domain>` |
 
 ---
 

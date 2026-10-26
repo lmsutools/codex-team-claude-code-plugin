@@ -95,9 +95,10 @@ subst < "$TPL/AGENTS.md" > "$ROOT/AGENTS.md"
 cp "$SKILL_DIR/scripts/cargo-fast.sh" "$SKILL_DIR/scripts/cargo-fast.ps1" "$ROOT/scripts/"
 cp "$SKILL_DIR/scripts/zthreads_sweep.sh" "$SKILL_DIR/scripts/timings_parallelism.py" "$SKILL_DIR/scripts/check-rust-arch.mjs" "$SKILL_DIR/scripts/rust-add-crate.mjs" "$ROOT/scripts/"
 
-cat > "$ROOT/.codex-team/profile.json" <<'EOF'
+cat > "$ROOT/.codex-team/profile.json" <<EOF
 {
-  "version": "1.0",
+  "profileVersion": 1,
+  "name": "$NAME",
   "extends": "rust",
   "components": {
     "gates": {
@@ -105,8 +106,9 @@ cat > "$ROOT/.codex-team/profile.json" <<'EOF'
       "checks": {
         "arch": {
           "level": "enforce",
+          "reason": "Enforces the 9 Golden Laws of Rust workspace architecture (<50ms).",
           "when": { "changed": ["**/*.rs", "**/Cargo.toml"] },
-          "command": ["node", "${pluginRoot}/scripts/check-rust-arch.mjs"],
+          "command": ["node", "\${pluginRoot}/scripts/check-rust-arch.mjs"],
           "timeoutSeconds": 60
         }
       }

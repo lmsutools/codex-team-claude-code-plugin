@@ -477,6 +477,10 @@ test("Golden Protocol: addSiblingCrate scaffolds compliant sibling crate and che
   assert.equal(res.status, 0, res.stderr);
   const project = path.join(ws, "nexus");
 
+  // Scaffolded .codex-team/profile.json must pass strict profileSchema validation
+  const scaffoldedProfile = JSON.parse(fs.readFileSync(path.join(project, ".codex-team/profile.json"), "utf8"));
+  validate(scaffoldedProfile, profileSchema);
+
   // Beat 1: add sibling adapter crate `billing`
   const added = addSiblingCrate("billing", { cwd: project });
   assert.equal(added.pkgName, "nexus-billing");
@@ -487,8 +491,23 @@ test("Golden Protocol: addSiblingCrate scaffolds compliant sibling crate and che
   assert.match(fs.readFileSync(path.join(project, "Cargo.toml"), "utf8"), /nexus-billing = \{ path = "crates\/billing" \}/);
   assert.equal(checkRustArchitecture(project).ok, true);
 
-  // Inject Laws 7, 8, and 9 into crates/billing/src/lib.rs (before #[cfg(test)])
+  // Verify a #[derive(Debug)] unit struct does NOT leak inDebugStruct state into a subsequent non-Debug struct
   const billingSrc = path.join(project, "crates/billing/src/lib.rs");
+  fs.writeFileSync(
+    billingSrc,
+    [
+      "#[derive(Debug)]",
+      "pub struct Marker;",
+      "",
+      "pub struct SafeSecretHolder {",
+      "    pub api_key: String,",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  assert.equal(checkRustArchitecture(project).ok, true);
+
+  // Inject Laws 7, 8, and 9 into crates/billing/src/lib.rs (before #[cfg(test)])
   fs.writeFileSync(
     billingSrc,
     [

@@ -252,12 +252,17 @@ stable ABI across compiler versions, and a plugin panic or UB corrupts the host 
   communicating over stdio/Unix domain sockets/named pipes via `postcard` or JSON-RPC,
   with shared memory (`memmap2` / OS shared memory) for bulk frame/audio buffers.
 
-### 7.5 Automated Architecture Guardrails (Enforce the DAG in Tests)
-In a large multi-agent codebase, rules written only in prose eventually drift. Add a
-fast workspace-topology test (runs `cargo metadata --no-deps --offline` in <100ms) that
-asserts:
-1. `domain` has **zero** dependencies on `tokio`, `reqwest`, `sqlx`, `axum`, or `sentry`.
-2. Sibling adapter crates (`crates/*` except `domain`/`app`) **never** depend on each
-   other — only on `domain` and `app`.
-3. Only `crates/platform` contains `#[cfg(target_os = ...)]`.
-4. Maximum dependency depth inside workspace crates stays $\le 4$.
+### 7.5 Automated Architecture Guardrails (`scripts/check-rust-arch.mjs` — The 9 Golden Laws)
+In a large multi-agent codebase, rules written only in prose eventually drift. Instead of
+relying on human memory, run `node scripts/check-rust-arch.mjs` (auto-wired into
+`.codex-team/profile.json` and CI, executing in **<50ms** without invoking `rustc`). It
+enforces all **9 Golden Laws** (see [`golden-protocol.md`](golden-protocol.md)):
+1. **No workspace feature thrash** (`arch::no_workspace_feature_thrash`).
+2. **Single integration-test binary per crate** (`arch::single_integration_test_binary` — `tests/it/main.rs`).
+3. **OS `#[cfg]` isolation** (`arch::platform_cfg_isolation` — only `crates/platform` contains `#[cfg(target_os = ...)]`).
+4. **Pure `domain` & sibling adapter isolation** (`arch::pure_domain` & `arch::sibling_adapter_isolation`).
+5. **Inherited workspace lints** (`arch::workspace_lints` — `[lints] workspace = true`).
+6. **Maximum workspace dependency depth $\le 4$** (`arch::max_workspace_depth`).
+7. **No blocking calls in async modules** (`arch::no_blocking_in_async` — catches `std::thread::sleep`, `std::fs::*`, `reqwest::blocking`).
+8. **No unbounded channels in production** (`arch::no_unbounded_channels`).
+9. **No unredacted secrets in `#[derive(Debug)]` structs** (`arch::no_unredacted_secrets`).
