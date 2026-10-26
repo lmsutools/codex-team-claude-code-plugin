@@ -382,7 +382,7 @@ test("checkRustArchitecture passes scaffolded workspaces and catches feature-thr
   const res = spawnSync("bash", [scaffold, "acme", ws, "--ship", "macos", "--ready", "windows,linux"], { encoding: "utf8" });
   assert.equal(res.status, 0, res.stderr);
   const project = path.join(ws, "acme");
-  assert.deepEqual(checkRustArchitecture(project), { ok: true, violations: [] });
+  assert.deepEqual(checkRustArchitecture(project), { ok: true, violations: [], newViolations: [], baselinedCount: 0, fixedCount: 0 });
 
   // Inject violations for each of the 5 architectural laws:
   // 1. Per-crate feature override on workspace dependency
@@ -412,4 +412,27 @@ test("checkRustArchitecture passes scaffolded workspaces and catches feature-thr
   const diag = rustDiagnostics(cli.stderr, project);
   assert.equal(diag.errors, 5);
   assert.equal(diag.diagnostics[0].code, "arch::no_workspace_feature_thrash");
+
+  // Brownfield Ratchet Mode: --write-baseline freezes the 5 legacy violations so existing debt passes,
+  // while introducing a 6th NEW violation fails with only the new violation reported!
+  const { writeArchBaseline, buildBrownfieldPlan } = await import("../scripts/check-rust-arch.mjs");
+  const plan = buildBrownfieldPlan(project);
+  assert.equal(plan.totalViolations, 5);
+  assert.equal(plan.phases.length, 5);
+
+  const written = writeArchBaseline(project);
+  assert.equal(written.count, 5);
+  const ratcheted = checkRustArchitecture(project);
+  assert.equal(ratcheted.ok, true);
+  assert.equal(ratcheted.baselinedCount, 5);
+  assert.equal(ratcheted.newViolations.length, 0);
+
+  // Now introduce a new violation in crates/store-memory/src/lib.rs -> Ratchet catches ONLY the new one!
+  fs.appendFileSync(path.join(project, "crates/store-memory/src/lib.rs"), '\n#[cfg(unix)]\npub fn new_leak() {}\n');
+  const afterNew = checkRustArchitecture(project);
+  assert.equal(afterNew.ok, false);
+  assert.equal(afterNew.baselinedCount, 5);
+  assert.equal(afterNew.newViolations.length, 1);
+  assert.equal(afterNew.newViolations[0].rule, "arch::platform_cfg_isolation");
+  assert.equal(afterNew.newViolations[0].file, "crates/store-memory/src/lib.rs");
 });

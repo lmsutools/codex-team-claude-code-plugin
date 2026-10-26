@@ -133,6 +133,21 @@ box / remote build / build-once-test-many) → verify utilization > 60%.
 Tune `-Zthreads` on the VM with [zthreads_sweep.sh](scripts/zthreads_sweep.sh) instead
 of guessing (build-performance.md §7).
 
+## Workflow E: rescue / migrate an existing advanced Rust codebase (Brownfield)
+
+Never attempt a "Big Bang" crate split on an existing, heavily developed Rust project.
+Follow [brownfield-migration.md](references/brownfield-migration.md) in strict order:
+1. Run `node scripts/check-rust-arch.mjs . --plan` to X-ray existing debt and generate
+   the 5-phase Strangler-Fig migration plan.
+2. Run `node scripts/check-rust-arch.mjs . --write-baseline` to freeze existing legacy
+   violations in `.codex-team/arch-baseline.json` (**Ratchet Mode**: existing debt is
+   tolerated so feature work continues, while any **new** violation fails immediately).
+3. Execute the 5 phases incrementally (Phase 0 zero-code linker/profile wins → Phase 1
+   unify `[workspace.dependencies]` + merge `tests/it/main.rs` → Phase 2 extract
+   `crates/platform` & `crates/telemetry` → Phase 3 carve out `crates/domain` with
+   `pub use` re-export shims → Phase 4 extract heavy adapters in parallel behind
+   `Arc<dyn Port>`), tightening `--write-baseline` after each phase until debt hits 0.
+
 ---
 
 ## Non-negotiable defaults (apply silently unless the owner objects)

@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
- * Fast (<50ms) architectural guardrail for multi-crate Rust workspaces.
+ * Fast (<50ms) architectural guardrail & brownfield migration ratchet for Rust workspaces.
  *
- * Enforces five laws that keep large multi-agent Rust codebases fast to compile
- * and clean at scale:
- *   1. No feature-unification thrashing: member Cargo.toml files must not add
- *      per-crate `features = [...]` on `[workspace.dependencies]` items, so
- *      `cargo test -p <crate>` and `cargo test --workspace` share one cache hash.
- *   2. Single integration-test binary per crate: `tests/` may have at most one
- *      top-level `.rs` file (or `tests/it/main.rs`), avoiding N× link steps.
- *   3. OS conditional compilation (`#[cfg(target_os/unix/windows)]`) stays inside
- *      the `platform` crate.
- *   4. Pure domain & shallow DAG: `domain` never depends on I/O or runtime crates
- *      (`tokio`, `reqwest`, `axum`, `sqlx`, `hyper`, `tonic`, `sentry`), and
- *      internal workspace dependency depth is <= 4.
- *   5. Member crates inherit `[lints] workspace = true` when the root defines
- *      `[workspace.lints]`.
+ * Modes:
+ *   node check-rust-arch.mjs [cwd]
+ *     Audits the workspace. If `.codex-team/arch-baseline.json` exists, runs in
+ *     RATCHET mode: baselined legacy violations are tolerated, and only NEW
+ *     violations fail the check.
+ *
+ *   node check-rust-arch.mjs [cwd] --write-baseline
+ *     Snapshots current violations into `.codex-team/arch-baseline.json` so an
+ *     existing brownfield codebase can adopt the guardrail immediately ("stop
+ *     the bleeding") and burn down debt incrementally.
+ *
+ *   node check-rust-arch.mjs [cwd] --plan
+ *     Outputs a prioritized 5-phase Strangler-Fig migration plan based on the
+ *     exact architectural debt detected in the workspace.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -25,6 +25,7 @@ const FORBIDDEN_DOMAIN_DEPS = new Set([
   "tokio", "reqwest", "hyper", "axum", "actix-web", "sqlx", "diesel", "sea-orm", "tonic", "sentry", "sentry-tracing",
 ]);
 const CFG_OS_RE = /#\s*\[\s*cfg\s*\([^)]*\b(?:target_os|target_family|unix|windows)\b/;
+const BASELINE_REL = ".codex-team/arch-baseline.json";
 
 function walkFiles(dir, predicate, out = []) {
   if (!fs.existsSync(dir)) return out;
@@ -72,25 +73,46 @@ function parseCrateManifest(manifestPath) {
   return { name, manifestPath, dir: path.dirname(manifestPath), raw, deps, featureOverrides, hasWorkspaceLints };
 }
 
-/** Audit a Rust workspace at `cwd` and return `{ ok, violations }`. */
-export function checkRustArchitecture(cwd = process.cwd()) {
+const violationKey = v => `${v.rule}::${v.file}`;
+
+/** Audit a Rust workspace at `cwd` and return `{ ok, violations, newViolations, baselinedCount, fixedCount }`. */
+export function checkRustArchitecture(cwd = process.cwd(), { ignoreBaseline = false } = {}) {
   const rootManifest = path.join(cwd, "Cargo.toml");
-  if (!fs.existsSync(rootManifest)) return { ok: true, violations: [] };
+  if (!fs.existsSync(rootManifest)) return { ok: true, violations: [], newViolations: [], baselinedCount: 0, fixedCount: 0 };
   const rootRaw = fs.readFileSync(rootManifest, "utf8");
-  if (!/\[workspace\]/.test(rootRaw)) return { ok: true, violations: [] };
+  const rel = p => path.relative(cwd, p).replaceAll("\\", "/");
+  const violations = [];
+
+  // Single-crate monolith detection (not a [workspace] yet)
+  if (!/\[workspace\]/.test(rootRaw)) {
+    const rootCrate = parseCrateManifest(rootManifest);
+    const testsDir = path.join(cwd, "tests");
+    if (fs.existsSync(testsDir)) {
+      const topRs = fs.readdirSync(testsDir, { withFileTypes: true }).filter(e => e.isFile() && e.name.endsWith(".rs")).map(e => e.name);
+      const hasItMain = fs.existsSync(path.join(testsDir, "it", "main.rs"));
+      if (topRs.length > 1 || (topRs.length >= 1 && hasItMain)) {
+        violations.push({
+          rule: "arch::single_integration_test_binary",
+          file: rel(path.join(testsDir, topRs[0] || "it/main.rs")),
+          line: 1,
+          column: 1,
+          message: `${rootCrate.name || "root"} has multiple integration test binaries (${[...topRs, ...(hasItMain ? ["it/main.rs"] : [])].join(", ")}); consolidate into tests/it/main.rs`,
+        });
+      }
+    }
+    return applyBaseline(cwd, violations, ignoreBaseline);
+  }
 
   const rootHasWorkspaceLints = /\[workspace\.lints(?:\.|\])/.test(rootRaw);
   const manifests = walkFiles(cwd, f => path.basename(f) === "Cargo.toml" && path.resolve(f) !== path.resolve(rootManifest));
   const crates = manifests.map(parseCrateManifest).filter(c => c.name);
-  const violations = [];
-  const rel = p => path.relative(cwd, p).replaceAll("\\", "/");
 
   for (const crate of crates) {
     const isPlatform = crate.name === "platform" || crate.name.endsWith("-platform") || rel(crate.dir) === "crates/platform";
     const isDomain = crate.name === "domain" || crate.name.endsWith("-domain") || rel(crate.dir) === "crates/domain";
     const isTelemetry = crate.name === "telemetry" || crate.name.endsWith("-telemetry") || rel(crate.dir) === "crates/telemetry";
 
-    // Law 1: No per-crate feature overrides on workspace dependencies (prevents cache thrashing between -p and --workspace)
+    // Law 1: No per-crate feature overrides on workspace dependencies
     if (!isTelemetry && crate.featureOverrides.length) {
       violations.push({
         rule: "arch::no_workspace_feature_thrash",
@@ -216,19 +238,153 @@ export function checkRustArchitecture(cwd = process.cwd()) {
     }
   }
 
-  return { ok: violations.length === 0, violations };
+  return applyBaseline(cwd, violations, ignoreBaseline);
+}
+
+function applyBaseline(cwd, violations, ignoreBaseline) {
+  const baselinePath = path.join(cwd, BASELINE_REL);
+  if (ignoreBaseline || !fs.existsSync(baselinePath)) {
+    return { ok: violations.length === 0, violations, newViolations: violations, baselinedCount: 0, fixedCount: 0 };
+  }
+  let baseline = { entries: [] };
+  try { baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8")); } catch {}
+  const knownKeys = new Set((baseline.entries || []).map(violationKey));
+  const currentKeys = new Set(violations.map(violationKey));
+  const newViolations = violations.filter(v => !knownKeys.has(violationKey(v)));
+  const baselinedCount = violations.length - newViolations.length;
+  const fixedCount = [...knownKeys].filter(k => !currentKeys.has(k)).length;
+  return {
+    ok: newViolations.length === 0,
+    violations,
+    newViolations,
+    baselinedCount,
+    fixedCount,
+  };
+}
+
+/** Snapshot current architectural violations into `.codex-team/arch-baseline.json`. */
+export function writeArchBaseline(cwd = process.cwd()) {
+  const audit = checkRustArchitecture(cwd, { ignoreBaseline: true });
+  const baselinePath = path.join(cwd, BASELINE_REL);
+  fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
+  const payload = {
+    version: "1.0",
+    entries: audit.violations.map(v => ({ rule: v.rule, file: v.file, message: v.message })),
+  };
+  fs.writeFileSync(baselinePath, JSON.stringify(payload, null, 2) + "\n");
+  return { path: baselinePath, count: payload.entries.length, entries: payload.entries };
+}
+
+/** Generate a prioritized 5-phase Strangler-Fig migration plan for an existing brownfield Rust repo. */
+export function buildBrownfieldPlan(cwd = process.cwd()) {
+  const rootManifest = path.join(cwd, "Cargo.toml");
+  const rootRaw = fs.existsSync(rootManifest) ? fs.readFileSync(rootManifest, "utf8") : "";
+  const isWorkspace = /\[workspace\]/.test(rootRaw);
+  const audit = checkRustArchitecture(cwd, { ignoreBaseline: true });
+  const byRule = rule => audit.violations.filter(v => v.rule === rule);
+
+  const phases = [
+    {
+      phase: 0,
+      title: "Freeze Debt & Drop In Zero-Code Build Accelerators (15 mins, 0 code risk)",
+      why: "Speeds up every subsequent refactoring compile and stops new architectural regressions immediately.",
+      steps: [
+        "Copy .cargo/config.toml (fast linker + split-debuginfo = 'unpacked') and [profile.dev] line-tables-only into root Cargo.toml.",
+        "Run 'node scripts/check-rust-arch.mjs --write-baseline' to record existing violations in .codex-team/arch-baseline.json (Ratchet Mode).",
+        "Add .codex-team/profile.json with '\"extends\": \"rust\"' and the 'arch' gate.",
+      ],
+    },
+    {
+      phase: 1,
+      title: "Eliminate Cache Thrashing & Multi-Binary Test Link Storms (30-60 mins, 2-5x faster TDD)",
+      why: "Unifies dependency hashes between 'cargo test -p' and '--workspace' and cuts test linking to 1 binary per crate.",
+      findings: [
+        ...byRule("arch::no_workspace_feature_thrash").map(v => v.file),
+        ...byRule("arch::single_integration_test_binary").map(v => v.file),
+      ],
+      steps: [
+        isWorkspace
+          ? "Hoist shared dependency feature lists into root [workspace.dependencies] and remove per-crate features=[...] overrides."
+          : "Convert root Cargo.toml into a [workspace] (resolver = '3') keeping the existing package in place while preparing crates/*.",
+        "Consolidate multiple tests/*.rs files per crate into a single tests/it/main.rs with 'mod <name>;' declarations.",
+      ],
+    },
+    {
+      phase: 2,
+      title: "Extract Leaf Infrastructure Crates: crates/platform & crates/telemetry",
+      why: "Isolates OS #[cfg] seams and Sentry/tracing-subscriber compilation out of core logic with zero domain risk.",
+      findings: byRule("arch::platform_cfg_isolation").map(v => `${v.file}:${v.line}`),
+      steps: [
+        "Create crates/platform and move scattered #[cfg(target_os/unix/windows)] functions behind a Platform trait; leave 'pub use' shims at old call sites.",
+        "Create crates/telemetry from resources/templates/telemetry.rs so only the composition root compiles sentry/tracing-subscriber.",
+      ],
+    },
+    {
+      phase: 3,
+      title: "Carve Out Pure crates/domain via Re-Export Shims (Strangler Seam)",
+      why: "Creates a sub-second-compile foundation crate without breaking existing imports.",
+      findings: byRule("arch::pure_domain").map(v => v.file),
+      steps: [
+        "Move pure value types, ID newtypes, and error enums (no tokio/sqlx/reqwest) into crates/domain.",
+        "In the legacy crate, add 'pub use <name>_domain::*;' so existing modules keep compiling unchanged while new crates depend on domain.",
+      ],
+    },
+    {
+      phase: 4,
+      title: "Decouple Sibling Adapters Behind Port Traits (Parallelizable with codex_batch)",
+      why: "Flattens dependency depth <= 4 so Cargo compiles all adapters concurrently across all CPU cores.",
+      findings: [
+        ...byRule("arch::sibling_adapter_isolation").map(v => v.file),
+        ...byRule("arch::max_workspace_depth").map(v => v.file),
+      ],
+      steps: [
+        "Define object-safe port traits (Arc<dyn Port>) in crates/app.",
+        "Dispatch parallel worktree jobs (codex_batch) to extract heavy adapters (db, http, storage, codegen) into sibling crates/* that depend only on domain + app.",
+        "Re-run 'node scripts/check-rust-arch.mjs --write-baseline' after each phase until baselined violations reach 0.",
+      ],
+    },
+  ];
+
+  return {
+    isWorkspace,
+    totalViolations: audit.violations.length,
+    countsByRule: Object.fromEntries(
+      [...new Set(audit.violations.map(v => v.rule))].sort().map(r => [r, byRule(r).length]),
+    ),
+    phases,
+  };
 }
 
 function main(argv = process.argv.slice(2)) {
-  const cwd = argv[0] ? path.resolve(argv[0]) : process.cwd();
+  let cwd = process.cwd();
+  let mode = "check";
+  for (const arg of argv) {
+    if (arg === "--write-baseline") mode = "write-baseline";
+    else if (arg === "--plan") mode = "plan";
+    else if (!arg.startsWith("-")) cwd = path.resolve(arg);
+  }
+
+  if (mode === "write-baseline") {
+    const written = writeArchBaseline(cwd);
+    process.stdout.write(`check-rust-arch: wrote ${written.count} baselined violation(s) to ${BASELINE_REL}\n`);
+    return;
+  }
+  if (mode === "plan") {
+    process.stdout.write(JSON.stringify(buildBrownfieldPlan(cwd), null, 2) + "\n");
+    return;
+  }
+
   const result = checkRustArchitecture(cwd);
   if (!result.ok) {
-    for (const v of result.violations) {
+    for (const v of result.newViolations) {
       process.stderr.write(`error[${v.rule}]: ${v.message}\n  --> ${v.file}:${v.line || 1}:${v.column || 1}\n`);
     }
     process.exit(1);
   }
-  process.stdout.write("check-rust-arch: ok\n");
+  const suffix = result.baselinedCount || result.fixedCount
+    ? ` (${result.baselinedCount} baselined legacy, ${result.fixedCount} fixed since baseline)`
+    : "";
+  process.stdout.write(`check-rust-arch: ok${suffix}\n`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
