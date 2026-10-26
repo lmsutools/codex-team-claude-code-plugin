@@ -37,6 +37,11 @@ first-class citizen. It provides:
    its hash, as usual.
 3. `target/` must be listed in `.gitignore`. Warm targets require it, and an
    unignored `target/` would bloat snapshots and scope checks.
+4. **If on macOS:** Remind the user to **Flip the One-Time macOS XProtect Switch (30 Seconds on This Mac)**:
+   ```bash
+   sudo spctl developer-mode enable-terminal
+   ```
+   and toggle their Terminal / IDE on in **System Settings → Privacy & Security → Developer Tools** so Apple's `syspolicyd` does not scan every newly linked Rust test binary before execution.
 
 ## 2. Affected packages
 

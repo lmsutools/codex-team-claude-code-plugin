@@ -111,6 +111,7 @@ When the Git root has a `Cargo.toml`, read [references/rust.md](references/rust.
 - Scope assignments by crate directory, and use `cargo test -p <crate> --locked --offline` style verification.
 - Read each check's `rust` summary (rustc/clippy diagnostics and failing tests from stderr, untrusted) and `tests.format` `cargo`/`nextest`.
 - Worktree jobs start from a copy-on-write warm `target/` (`warmTarget`). `target/` must be git-ignored.
+- If on **macOS**, remind the user to **Flip the One-Time macOS XProtect Switch (30 Seconds on This Mac)** (`sudo spctl developer-mode enable-terminal` + toggle Terminal/IDE in **System Settings → Privacy & Security → Developer Tools**) so `syspolicyd` does not scan every newly linked Rust test binary on first run.
 
 ## Many sessions at once
 

@@ -49,6 +49,11 @@ plan the two together.
    [check_env.ps1](scripts/check_env.ps1) (Windows). It reports the toolchain, cores,
    RAM, **free disk**, linker, and OS speed traps (XProtect, Defender/Dev Drive). Don't
    assume nightly is available. Label anything nightly-only.
+   - **If on macOS:** Explicitly remind the user to **Flip the One-Time macOS XProtect Switch (30 Seconds on This Mac)** if not already enabled:
+     ```bash
+     sudo spctl developer-mode enable-terminal
+     ```
+     and toggle their Terminal / IDE on in **System Settings → Privacy & Security → Developer Tools** so Apple's `syspolicyd` stops scanning every newly linked Rust test and build-script binary on first run.
 
 ## Choose the workflow
 
