@@ -4,7 +4,7 @@ Claude Code remains the host. Claude leads and accepts work; Codex implements it
 
 ## Start with a profile
 
-Place a reviewed profile at .codex-team/profile.json. See [the schema](../schemas/profile.schema.json) and the [Node example](../examples/node/profile.json). The standard and strict templates are built into the runtime and also exported under templates/.
+Place a reviewed profile at .codex-team/profile.json. See [the schema](../schemas/profile.schema.json), the [Node example](../examples/node/profile.json) and the [Rust example](../examples/rust/profile.json). The standard, strict and rust templates are built into the runtime and also exported under templates/. In addition to `repoRoot`, `worktree`, `branch`, `lane`, `scratch`, `file`, `files` and `fileId`, profile commands can use two reserved variables: `${changedList}`, a file listing the job's changed paths, and `${pluginRoot}`, the installed plugin root (for example `${pluginRoot}/scripts/cargo-affected.mjs`).
 
 Call codex_profile read with cwd and, for a lane project, its target branch or lane/topic. Inspect the resolved policy, referenced resource hashes and command templates. Call approve with its exact expectedHash. Approval is specific to the common Git repository, lane and policy hash. It is Claude's technical approval within existing authorization, not permission to install, publish or make business decisions.
 

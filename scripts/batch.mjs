@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import * as S from "./store.mjs";
 import * as C from "./contracts.mjs";
 import { git, snapshot, integrateFiles, changes } from "./git.mjs";
+import { warmJobTarget } from "./rust.mjs";
 import { loadProfile, assertApproved, currentProfile } from "./profile.mjs";
 import { enabled, matches, digest, branch } from "./policy-core.mjs";
 import { capturePolicy } from "./policy-checks.mjs";
@@ -208,6 +209,9 @@ export async function batchTool(input) {
             ]
           : ["worktree", "add", "--detach", child.cwd, batch.baseline.head],
       );
+      // Rust: each child starts from a copy-on-write clone of the parent's target/
+      // (per-child directories: children never share a target lock).
+      warmJobTarget(cwd, child.cwd, git);
     }
     if (enabled(profile, "branchMode"))
       S.transaction(() =>

@@ -9,9 +9,11 @@ const RUST_TOOL = /^(?:cargo|rustc|rustup|rustdoc|rustfmt|clippy-driver|cargo-[a
 const present = (name, environment) => Object.keys(environment).some(key => key.toUpperCase() === name);
 const toolName = command => String(command || "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "");
 export const rustTool = command => RUST_TOOL.test(toolName(command));
+/** cargo-affected.mjs (bundled) runs cargo itself, so `node .../cargo-affected.mjs` counts as a Rust tool. */
+const runsAffected = (args = []) => (args || []).some(arg => toolName(arg) === "cargo-affected.mjs");
 /** Homes to pass automatically to a check that runs a Rust tool directly; recorded as autoPassEnv. */
-export function toolchainPassEnv(command, passEnv = [], environment = process.env) {
-  if (!rustTool(command)) return [];
+export function toolchainPassEnv(command, passEnv = [], environment = process.env, args = []) {
+  if (!rustTool(command) && !runsAffected(args)) return [];
   const have = new Set((passEnv || []).map(name => name.toUpperCase()));
   return TOOLCHAIN_HOMES.filter(name => !have.has(name) && present(name, environment));
 }

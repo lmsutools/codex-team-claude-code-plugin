@@ -468,8 +468,8 @@ test("reviewer persists cleanup sandbox limits and distinguishes secrets, budget
 
 test("A: bare check resolution excludes planted Windows executables and project PATH directories", async () => {
   const cwd = f.project();
-  for (const name of ["node.exe", "node.cmd", "node.com", "node.bat"]) fs.writeFileSync(path.join(cwd, name), "not the trusted executable");
-  fs.mkdirSync(path.join(cwd, "tools")); fs.writeFileSync(path.join(cwd, "tools/node.exe"), "planted");
+  for (const name of ["node", "node.exe", "node.cmd", "node.com", "node.bat"]) fs.writeFileSync(path.join(cwd, name), "not the trusted executable");
+  fs.mkdirSync(path.join(cwd, "tools")); fs.writeFileSync(path.join(cwd, "tools/node"), "planted"); fs.writeFileSync(path.join(cwd, "tools/node.exe"), "planted");
   const environment = { ...process.env, PATH: [cwd, path.join(cwd, "tools"), path.dirname(process.execPath)].join(path.delimiter) };
   assert.equal(resolveCheckExecutable("node", cwd, environment).toLowerCase(), fs.realpathSync(process.execPath).toLowerCase());
   assert.throws(() => resolveCheckExecutable("node", cwd, { PATH: cwd }), /only inside the project/);

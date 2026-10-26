@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 import * as S from "./store.mjs";
 import { git, safeFile } from "./git.mjs";
 import { classify } from "./policy-checks.mjs";
@@ -313,7 +314,7 @@ export const profileSchema = object(
     passEnv: strings,
     profileVersion: { type: "integer", enum: [1] },
     name: string,
-    extends: enumeration(["standard", "strict"]),
+    extends: enumeration(["standard", "strict", "rust"]),
     variables: record(string),
     lanes: object({ source: string }, ["source"]),
     components: componentsSchema,
@@ -419,7 +420,29 @@ const strict = merge(standard, {
     },
   },
 });
-export const templates = { standard, strict };
+export const RUST_INPUTS = ["**/*.rs", "**/Cargo.toml", "Cargo.lock", ".cargo/**", "rust-toolchain", "rust-toolchain.toml", "**/build.rs", "clippy.toml", ".clippy.toml", "rustfmt.toml", ".rustfmt.toml"];
+const affected = (...cargoArgs) => ["node", "${pluginRoot}/scripts/cargo-affected.mjs", "--changed-list", "${changedList}", "--", ...cargoArgs];
+/**
+ * Rust workspaces: format, clippy and tests on the packages a change affects
+ * (owners of changed files plus their workspace dependents), offline and
+ * locked because checks run in the network-off sandbox. Run `cargo fetch
+ * --locked` on the host once per dependency change.
+ */
+const rust = merge(standard, {
+  name: "rust",
+  components: {
+    gates: {
+      level: "enforce",
+      retryOnTimeout: 1,
+      checks: {
+        fmt: { level: "advise", reason: "Formatting drift is reported, not blocking.", when: { changed: ["**/*.rs", "rustfmt.toml", ".rustfmt.toml"] }, command: ["cargo", "fmt", "--all", "--check"], timeoutSeconds: 300 },
+        clippy: { reason: "Lints with warnings denied on affected packages and their dependents.", when: { changed: RUST_INPUTS }, command: affected("clippy", "--all-targets", "--locked", "--offline", "--", "-D", "warnings"), timeoutSeconds: 1800 },
+        tests: { reason: "Unit, integration and doc tests of affected packages and their dependents.", when: { changed: RUST_INPUTS }, command: affected("test", "--locked", "--offline", "--no-fail-fast"), timeoutSeconds: 1800 },
+      },
+    },
+  },
+});
+export const templates = { standard, strict, rust };
 function tighten(base, local, prefix = "") {
   for (const [k, value] of Object.entries(local)) {
     const old = base?.[k],
@@ -579,6 +602,8 @@ export function loadProfile(cwd, options = {}) {
         "files",
         "fileId",
         "scratch",
+        "changedList",
+        "pluginRoot",
       ].includes(name)
     )
       throw new Error("Cannot override reserved variable: " + name);
@@ -654,6 +679,10 @@ export function variables(profile, cwd, extra = {}) {
     branch: profile?.branch || branch(cwd),
     lane: profile?.lane || "",
     scratch: extra.scratch || "",
+    changedList: extra.changedList || "",
+    // The installed plugin's root, so profile checks can run bundled helpers
+    // such as ${pluginRoot}/scripts/cargo-affected.mjs on any machine.
+    pluginRoot: PLUGIN_ROOT,
     ...(profile?.variables || {}),
     ...extra,
   };

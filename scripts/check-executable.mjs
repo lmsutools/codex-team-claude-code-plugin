@@ -25,7 +25,11 @@ export function resolveCheckExecutable(command, cwd, environment = process.env, 
         const real = fs.realpathSync.native(candidate);
         if (inside(directory, path.resolve(cwd)) || inside(realDirectory, root) || inside(real, root)) { projectMatch = true; continue; }
         if (platform !== "win32") fs.accessSync(real, fs.constants.X_OK);
-        return real;
+        // Multi-call binaries pick their tool from argv[0]: rustup's ~/.cargo/bin/cargo is a
+        // symlink to rustup, so returning the realpath would run `rustup test ...`. Keep the
+        // PATH entry's name (inside the already-validated, resolved directory) when the target's
+        // basename differs; the containment checks above still apply to the real target.
+        return path.basename(real).toLowerCase() === path.basename(candidate).toLowerCase() ? real : candidate;
       } catch {}
     }
   }

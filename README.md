@@ -28,6 +28,12 @@ Claude's context stays on design, review and judgment, and Codex does the typing
 - **Honest accounting.** After each task, a footer shows who wrote the output, who authored the code, what it consumed and (with your prices) what it cost.
 - **Service tiers.** Ask for `fast`, `priority` or `ultrafast` per job. The plugin validates the tier against the selected CLI and shows the tier that actually ran, including when Codex drops one the model does not offer.
 - **Zero runtime dependencies.** Plain Node.js 24 with its built-in SQLite: about 12,000 lines of code and 400+ tests that run against a fake Codex, with no model usage.
+- **First-class Rust.**
+  - A `rust` profile template runs fmt, clippy and tests on only the packages a change affects (the owners of changed files plus their workspace dependents), offline and locked.
+  - Cargo and nextest test counts are recognized.
+  - Decision packets carry compact rustc/clippy diagnostics and failing tests with `file:line`.
+  - Worktree jobs start from a copy-on-write warm `target/`, measured at about 2× faster builds.
+  - `codex_doctor` reports offline-dependency readiness.
 
 ## How a job flows
 
@@ -77,7 +83,7 @@ While Codex works, Claude runs a background waiter that wakes it only on a phase
 
 ### Project profiles: twelve policy components
 
-Projects opt in with `.codex-team/profile.json`. Each component is `off`, `advise` or `enforce`, approved by exact hash. Local overrides can only tighten policy, and built-in `standard` and `strict` templates are included.
+Projects opt in with `.codex-team/profile.json`. Each component is `off`, `advise` or `enforce`, approved by exact hash. Local overrides can only tighten policy, and built-in `standard`, `strict` and `rust` templates are included.
 
 | Component | What it governs |
 | --- | --- |
@@ -221,6 +227,7 @@ Everything works without configuration. Optional settings:
 | `CODEX_TEAM_TOKENS` | Footer: `long` (default), `always` or `off` |
 | `CODEX_TEAM_TOKENS_MIN_CALLS` | Minimum Claude calls before the footer appears (default 8) |
 | `CODEX_TEAM_DB_BUSY_MS` | How long a write waits for the shared database (default 60000) |
+| `CODEX_TEAM_WARM_TARGET` | Rust worktree jobs: `clone` (default, copy-on-write only), `copy` (full-copy fallback) or `off` |
 | `CODEX_TEAM_PROBE_TIMEOUT_MS` | Bound for one sandbox preflight attempt (default 180000 for a new folder, 60000 once warm) |
 | `CODEX_TEAM_OBSERVATION_TIMEOUT_MS` | Bound for the post-check observation (default: at least 180000, or 8× the measured snapshot cost, at most 900000) |
 | `~/.claude/codex-team/prices.json` | Your per-million-token rates, to enable dollar totals |

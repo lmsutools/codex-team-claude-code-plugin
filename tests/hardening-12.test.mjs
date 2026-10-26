@@ -66,7 +66,8 @@ test('doctor 0.157.x setup-refresh hint is version and failure specific',t=>{
  const cwd=F.project(),file=path.join(F.root,'probe.json');fs.writeFileSync(file,JSON.stringify({mode:'fail'}));
  process.env.CODEX_TEAM_FAKE_PROBE=file;process.env.CODEX_TEAM_FAKE_VERSION='codex-cli 0.157.2';
  t.after(()=>{delete process.env.CODEX_TEAM_FAKE_PROBE;delete process.env.CODEX_TEAM_FAKE_VERSION;});
- assert.match(R.doctor({cwd,probe:true}).hint,/CODEX_TEAM_CODEX/);assert.match(R.doctor({cwd}).hint,/CODEX_TEAM_CODEX/);
+ // The sandbox preflight (probeRuntime) is implemented for native Windows only; elsewhere it reports untested.
+ if(process.platform==='win32'){assert.match(R.doctor({cwd,probe:true}).hint,/CODEX_TEAM_CODEX/);assert.match(R.doctor({cwd}).hint,/CODEX_TEAM_CODEX/);}
  assert.match(versionHint('codex-cli 0.157.2',{failure:{evidence:'setup refresh had errors'}}),/CODEX_TEAM_CODEX/);
  assert.equal(versionHint('codex-cli 0.153.2','setup refresh had errors'),null);assert.equal(versionHint('codex-cli 0.157.0','other'),null);
 });

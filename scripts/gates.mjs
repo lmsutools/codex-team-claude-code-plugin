@@ -16,6 +16,7 @@ import {
   boundedRead,
 } from "./policy-core.mjs";
 import { variables } from "./profile.mjs";
+import { parseCargoCounts } from "./rust.mjs";
 
 export const applies = (when, files) =>
   when === "always" || files.some((f) => matches(when?.changed, f));
@@ -218,11 +219,16 @@ export function planChecks(state, current, changed, input = {}) {
           : id;
         const scratch = path.join(state.scratch, "checks", id);
         if (!input.preview) fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
+        // ${changedList}: a file listing the job's changed paths, one per line
+        // (read by scripts/cargo-affected.mjs; readable from the sandbox).
+        const changedList = path.join(scratch, "changed-files.txt");
+        if (!input.preview) fs.writeFileSync(changedList, changed.join("\n") + (changed.length ? "\n" : ""), { mode: 0o600 });
         const argv = expand(
           cfg.perFile?.command || cfg.command || [],
           variables(profile, state.cwd, {
             worktree: state.executionCwd,
             scratch,
+            changedList,
             file: file || "",
             files: files.filter(Boolean),
             fileId,
@@ -260,6 +266,8 @@ export function parseCounts(text) {
     bunFail = (text.match(/^\(fail\)/gm) || []).length;
   if (bunPass || bunFail)
     return { pass: bunPass, fail: bunFail, format: "bun" };
+  const cargo = parseCargoCounts(text);
+  if (cargo) return cargo;
   const passed = text.match(/(?:^|\n)(?:#|ℹ)\s*pass\s+(\d+)/),
     failed = text.match(/(?:^|\n)(?:#|ℹ)\s*fail\s+(\d+)/);
   return passed && failed

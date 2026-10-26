@@ -29,7 +29,7 @@ export function requireHostAck(state,acknowledgment,content) {
 }
 export function checkInvocation(state,check,binary) {
   // cargo/rustc/rustup checks also receive the host's CARGO_HOME/RUSTUP_HOME (paths, not secrets).
-  const autoPassEnv=toolchainPassEnv(check.command,check.passEnv||[]), passEnv=[...(check.passEnv||[]),...autoPassEnv];
+  const autoPassEnv=toolchainPassEnv(check.command,check.passEnv||[],process.env,check.args||[]), passEnv=[...(check.passEnv||[]),...autoPassEnv];
   const env=checkEnvironment(process.env,passEnv);
   if(check.host===true) return {command:check.command,args:check.args||[],env,executedIn:"host",autoPassEnv,advisory:inlineCommand([check.command,...(check.args||[])])?"Inline code: inspect before authorizing host execution.":null};
   // The launcher needs its runtime home. Its child command gets only the shell policy.
@@ -48,5 +48,6 @@ export function checkInvocation(state,check,binary) {
 export function sandboxLimitation(text,cwd) {
   if(/CreateProcessAsUserW|(?:taskkill|WMI|Win32_Process)[\s\S]{0,400}(?:Access (?:is )?denied|EPERM|EACCES)/i.test(text)) return true;
   if(!/EPERM|EACCES|Access is denied/i.test(text)) return false;
-  return (text.match(/[A-Za-z]:[\\/][^\r\n'"<>]+|\/(?:tmp|home|etc|var|Users)\/[^\r\n'"<> ]+/g)||[]).some(file=>!inside(path.resolve(file.trim()),path.resolve(cwd)));
+  const canon=p=>{try{return fs.realpathSync(p);}catch{try{return path.join(fs.realpathSync(path.dirname(p)),path.basename(p));}catch{return path.resolve(p);}}};
+  return (text.match(/[A-Za-z]:[\\/][^\r\n'"<>]+|\/(?:private\/(?:tmp|var|etc)|tmp|home|etc|var|Users)\/[^\r\n'"<> ]+/g)||[]).some(file=>!inside(canon(file.trim()),canon(cwd)));
 }

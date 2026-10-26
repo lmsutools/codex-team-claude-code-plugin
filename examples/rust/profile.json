@@ -1,0 +1,64 @@
+{
+  "profileVersion": 1,
+  "name": "rust-workspace",
+  "extends": "rust",
+  "components": {
+    "gates": {
+      "level": "enforce",
+      "checks": {
+        "tests": {
+          "when": {
+            "changed": [
+              "**/*.rs",
+              "**/Cargo.toml",
+              "Cargo.lock",
+              ".cargo/**"
+            ]
+          },
+          "command": [
+            "node",
+            "${pluginRoot}/scripts/cargo-affected.mjs",
+            "--changed-list",
+            "${changedList}",
+            "--",
+            "nextest",
+            "run",
+            "--locked",
+            "--offline",
+            "--no-fail-fast"
+          ],
+          "timeoutSeconds": 1800
+        },
+        "windows-ready": {
+          "level": "advise",
+          "reason": "Keeps the Ready Windows target compiling (cargo check needs no MSVC linker).",
+          "when": {
+            "changed": [
+              "**/*.rs",
+              "**/Cargo.toml",
+              "Cargo.lock"
+            ]
+          },
+          "command": [
+            "cargo",
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--locked",
+            "--offline",
+            "--target",
+            "x86_64-pc-windows-msvc",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "timeoutSeconds": 1800
+        }
+      }
+    },
+    "report": {
+      "level": "advise",
+      "template": "builtin:short"
+    }
+  }
+}

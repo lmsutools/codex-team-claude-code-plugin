@@ -3,6 +3,14 @@
   "title": "codex-team project profile",
   "type": "object",
   "properties": {
+    "passEnv": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 20000
+      },
+      "maxItems": 400
+    },
     "profileVersion": {
       "type": "integer",
       "enum": [
@@ -17,7 +25,8 @@
       "type": "string",
       "enum": [
         "standard",
-        "strict"
+        "strict",
+        "rust"
       ]
     },
     "variables": {
@@ -289,6 +298,14 @@
               "minimum": 0,
               "maximum": 1
             },
+            "executionSensitivePaths": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 20000
+              },
+              "maxItems": 400
+            },
             "checks": {
               "type": "object",
               "additionalProperties": {
@@ -346,6 +363,27 @@
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 1800
+                  },
+                  "host": {
+                    "type": "boolean"
+                  },
+                  "passEnv": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 20000
+                    },
+                    "maxItems": 400
+                  },
+                  "allowInline": {
+                    "type": "boolean"
+                  },
+                  "criteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
                   },
                   "perFile": {
                     "type": "object",
@@ -1393,6 +1431,14 @@
                 "minimum": 0,
                 "maximum": 1
               },
+              "executionSensitivePaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 20000
+                },
+                "maxItems": 400
+              },
               "checks": {
                 "type": "object",
                 "additionalProperties": {
@@ -1450,6 +1496,27 @@
                       "type": "integer",
                       "minimum": 1,
                       "maximum": 1800
+                    },
+                    "host": {
+                      "type": "boolean"
+                    },
+                    "passEnv": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "maxLength": 20000
+                      },
+                      "maxItems": 400
+                    },
+                    "allowInline": {
+                      "type": "boolean"
+                    },
+                    "criteria": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
                     },
                     "perFile": {
                       "type": "object",

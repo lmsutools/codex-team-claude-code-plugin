@@ -1,0 +1,100 @@
+{
+  "profileVersion": 1,
+  "name": "rust",
+  "components": {
+    "textHygiene": {
+      "level": "advise",
+      "lineEndings": "preserve",
+      "encoding": "utf-8",
+      "bom": "preserve",
+      "finalNewline": "preserve"
+    },
+    "gates": {
+      "level": "enforce",
+      "retryOnTimeout": 1,
+      "checks": {
+        "fmt": {
+          "level": "advise",
+          "reason": "Formatting drift is reported, not blocking.",
+          "when": {
+            "changed": [
+              "**/*.rs",
+              "rustfmt.toml",
+              ".rustfmt.toml"
+            ]
+          },
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--check"
+          ],
+          "timeoutSeconds": 300
+        },
+        "clippy": {
+          "reason": "Lints with warnings denied on affected packages and their dependents.",
+          "when": {
+            "changed": [
+              "**/*.rs",
+              "**/Cargo.toml",
+              "Cargo.lock",
+              ".cargo/**",
+              "rust-toolchain",
+              "rust-toolchain.toml",
+              "**/build.rs",
+              "clippy.toml",
+              ".clippy.toml",
+              "rustfmt.toml",
+              ".rustfmt.toml"
+            ]
+          },
+          "command": [
+            "node",
+            "${pluginRoot}/scripts/cargo-affected.mjs",
+            "--changed-list",
+            "${changedList}",
+            "--",
+            "clippy",
+            "--all-targets",
+            "--locked",
+            "--offline",
+            "--",
+            "-D",
+            "warnings"
+          ],
+          "timeoutSeconds": 1800
+        },
+        "tests": {
+          "reason": "Unit, integration and doc tests of affected packages and their dependents.",
+          "when": {
+            "changed": [
+              "**/*.rs",
+              "**/Cargo.toml",
+              "Cargo.lock",
+              ".cargo/**",
+              "rust-toolchain",
+              "rust-toolchain.toml",
+              "**/build.rs",
+              "clippy.toml",
+              ".clippy.toml",
+              "rustfmt.toml",
+              ".rustfmt.toml"
+            ]
+          },
+          "command": [
+            "node",
+            "${pluginRoot}/scripts/cargo-affected.mjs",
+            "--changed-list",
+            "${changedList}",
+            "--",
+            "test",
+            "--locked",
+            "--offline",
+            "--no-fail-fast"
+          ],
+          "timeoutSeconds": 1800
+        }
+      }
+    }
+  }
+}

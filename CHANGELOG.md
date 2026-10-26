@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased: first-class Rust
+
+Rust workspaces get dedicated profile, verification, review and isolation support. Nothing changes for non-Cargo projects.
+
+- **`rust` profile template.** Use `"extends": "rust"`.
+  - `fmt` (advise): `cargo fmt --all --check`.
+  - `clippy` (enforce): `-D warnings`.
+  - `tests` (enforce): `cargo test --no-fail-fast`.
+  - `clippy` and `tests` run with `--locked --offline` on the affected packages, and only when Rust inputs change.
+  - `examples/rust/profile.json` swaps in nextest and adds a cross-target clippy for a Ready platform.
+- **Affected packages.** `scripts/cargo-affected.mjs` selects the workspace packages that own changed files, plus their transitive workspace dependents (normal, dev and build), from `cargo metadata --no-deps --offline`.
+  - The root manifest, `Cargo.lock`, `.cargo/` and toolchain/lint configuration select `--workspace`.
+  - Docs-only changes skip the check. `--always` runs the workspace instead.
+- **New reserved profile variables.** `${changedList}` is a file listing the job's changed paths, written per check under the scratch folder. `${pluginRoot}` is the installed plugin root.
+- **Test counts.** libtest `test result:` lines are summed across test binaries and doc tests (`format: "cargo"`). The nextest Summary line is parsed too (`format: "nextest"`), and timeouts count as failures.
+- **Rust summaries.** Checks that run cargo/rustc (or cargo-affected) record `rust`: error and warning counts, up to 8 diagnostics (errors first, each with code, message and cwd-relative `file:line:column`), up to 8 failing tests (libtest panics in old and new thread formats, nextest FAIL lines, listed FAILED tests), and up to 8 unformatted files (`rustfmt --check` `Diff in ...` lines).
+  - The summary is parsed from stderr and stdout. `outputTail` carries stdout only, so rustc errors were previously invisible to packets and reviewers.
+  - Decision packets carry the first 3 of each. Reviewers get the full summary.
+  - The summary is labeled untrusted.
+- **Warm targets.** Worktree jobs, branch-mode jobs and batch children start from a copy-on-write clone of the original checkout's ignored `target/`, recorded as `warmTarget`.
+  - Uses `/bin/cp -c -R` (`clonefile(2)`) on macOS APFS and `fs.cpSync(..., COPYFILE_FICLONE_FORCE)` on copy-on-write filesystems on Linux/Windows.
+  - Measured on Helix: worktree test build 9.4 s → 4.6 s, with a 0.5 s APFS clone.
+  - Correctness was verified: a dependency change in the worktree still fails the dependent's tests, and the original stays untouched.
+  - Unsupported filesystems or tracked `target/` directories are skipped rather than copied. `CODEX_TEAM_WARM_TARGET=clone|copy|off` controls the behavior.
+  - Each child gets its own directory, so children never share a target lock.
+- **Multi-call binary symlinks (`rustup`).** `resolveCheckExecutable` preserves the symlink's basename when `realpath` points to a multi-call launcher with a different basename (such as `~/.cargo/bin/cargo` -> `rustup`), while still validating containment on the resolved target.
+- **Toolchain homes.** `CARGO_HOME`/`RUSTUP_HOME` are passed automatically to `node .../cargo-affected.mjs` checks as well.
+- **Worker prompt.** In Cargo workspaces, Codex is told to:
+  - work offline and locked;
+  - report a needed new crate as a blocker;
+  - iterate with `cargo check`/`cargo test -p` on the packages it changes;
+  - never `cargo clean`.
+- **`codex_doctor` Rust section.** It reports the cargo version, offline-dependency readiness (`cargo fetch --locked --offline`), nextest and the warm-target mode, with advice.
+- **Contracts.** `schemas/profile.schema.json` was regenerated. It had been missing top-level `passEnv`, the check fields `host`/`passEnv`/`allowInline`/`criteria`, and `gates.executionSensitivePaths`. A new sync test keeps templates, schema and examples in step with the runtime.
+- **Lead skill.** A short "Rust projects" section links to `skills/lead/references/rust.md`.
+- **Tests & macOS compatibility.** `tests/rust.test.mjs` adds 21 tests (unit, end-to-end against fake Codex, and real cargo), smoke-tested end-to-end against `codex-cli 0.162.1` (`gpt-6-astra`) on a Cargo workspace. Added `tests/setup-realpath-tmp.mjs` and fixed `/private/var` path canonicalization in `sandboxLimitation` so all 485 tests pass on macOS as well as Windows/Linux.
+
 ## 1.2.2 (2026-10-18)
 
 1.2.2 works with the latest Codex CLI and adds service tiers.

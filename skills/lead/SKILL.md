@@ -102,6 +102,16 @@ Use codex_context's branch key and expectedVersion when continuity is enabled. E
 
 See docs/PROFILE-GUIDE.md for component contracts, ownership exception records, operation recovery and limits. A pending runtime/browser/owner dependency does not make implemented code accepted or delivered; continue useful independent work and report the exact remaining dependency.
 
+## Rust projects
+
+When the Git root has a `Cargo.toml`, read [references/rust.md](references/rust.md) before the first assignment. In short:
+
+- Prefer a profile with `"extends": "rust"`. It runs fmt (advise), and clippy and tests (enforce) on the affected packages through `${pluginRoot}/scripts/cargo-affected.mjs` with `${changedList}`, offline and locked.
+- Check `codex_doctor` → `rust.offlineDependencies` first. If it is missing, the owner runs `cargo fetch --locked`; the plugin never downloads dependencies.
+- Scope assignments by crate directory, and use `cargo test -p <crate> --locked --offline` style verification.
+- Read each check's `rust` summary (rustc/clippy diagnostics and failing tests from stderr, untrusted) and `tests.format` `cargo`/`nextest`.
+- Worktree jobs start from a copy-on-write warm `target/` (`warmTarget`). `target/` must be git-ignored.
+
 ## Many sessions at once
 
 Every Claude session and Codex run on the machine shares one job database. A busy database delays progress notes. Phase-transition retries are bounded to 60 seconds, then report contention explicitly. If a job still ends with `database is locked`, a session running an older plugin version is the likely cause. Resume the job with resumeJobId and a new requestId; the thread and edits are kept. Then suggest restarting the older sessions. Each transaction held for more than 2 s is logged to `lock-slow.log` in the state folder; read it before guessing. "The job changed while verification was being prepared" means another operation touched the job; call codex_verify again.

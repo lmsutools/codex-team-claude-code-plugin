@@ -5,6 +5,8 @@ import { reportPreview } from "./report-preview.mjs";
 import { untrustedOutput } from "./untrusted-output.mjs";
 import { digest } from "./policy-core.mjs";
 import { mergeFindings } from './review-order.mjs';
+/** Rust summary for the capped packet: counts plus the first 3 diagnostics and failing tests (full summary stays in codex_status). */
+const packetRust = r => ({ errors: r.errors, warnings: r.warnings, diagnostics: (r.diagnostics || []).slice(0, 3), failedTests: (r.failedTests || []).slice(0, 3), ...(r.unformatted ? { unformattedFiles: r.unformattedFiles, unformatted: r.unformatted.slice(0, 3) } : {}), ...((r.diagnostics || []).length > 3 || (r.failedTests || []).length > 3 ? { truncated: true } : {}) });
 export function buildPacket(state, hunks, reviewer, error = null) {
   return { version: 1, jobId: state.jobId, assignmentHash: digest(state.assignment),
     fingerprint: state.verifiedFingerprint, status: reviewer && !error ? "ready" : "incomplete",
@@ -16,7 +18,7 @@ export function buildPacket(state, hunks, reviewer, error = null) {
     gitConfigChanged: state.gitConfigChanged || null,
     presentationOmittedFiles: [...new Set(hunks.hunks.filter(h => ["before", "after"].some(k => String(h[k] || "").length > 400 || (String(h[k] || "").match(/[^\n]*\n|[^\n]+$/g)?.length || 0) > 6)).map(h => h.file))],
     changedFiles: state.changes?.files || [],
-    checks: (state.verification?.checks || []).map(c => ({ id: c.id, executedIn: c.executedIn, sandboxLimited: c.sandboxLimited || false, criteria: c.criteria || [], status: c.status, exitCode: c.exitCode, tests: c.tests ?? null })),
+    checks: (state.verification?.checks || []).map(c => ({ id: c.id, executedIn: c.executedIn, sandboxLimited: c.sandboxLimited || false, criteria: c.criteria || [], status: c.status, exitCode: c.exitCode, tests: c.tests ?? null, ...(c.rust ? { rust: packetRust(c.rust) } : {}) })),
     criteria: reviewer?.criteria || [], risks: reviewer?.risks || [], reviewerError: error,
     hunksAvailable: hunks.available, hunks: hunks.hunks, omittedHunks: hunks.omitted, unavailableHunks: hunks.unavailable,
     blockers: state.result?.blockers || [], sandboxLimitsCount: state.result?.sandboxLimits?.length || 0 };

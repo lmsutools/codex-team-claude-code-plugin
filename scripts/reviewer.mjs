@@ -23,7 +23,7 @@ export function buildReviewerPrompt(state, hunks, handbook = "") {
     (hunks.inline === false ? 'Hunks are not inline. Read the supplied baseline and verified copies outside the project. Tool reads are required for cited changed files. ' : '') +
     (state.findingsOnly ? 'This shard returns findings only; criteria must be an empty array. ' : '') +
     "\nREVIEW_INPUT\n" + JSON.stringify({ objective: state.assignment.objective, scope: state.assignment.scope, constraints: state.assignment.constraints || [], criteria: state.findingsOnly ? [] : state.assignment.acceptanceCriteria, review: state.review, findingsFiles: state.findingsFiles,
-      checks: state.verification.checks.map(c => ({ id: c.id, criteria: c.criteria || [], status: c.status, exitCode: c.exitCode, tests: c.tests ?? null, outputTail: c.outputTail?.slice(-2000) })), hunks: hunks.inline === false ? { ...hunks, hunks: hunks.hunks.map(({ before, after, ...range }) => range) } : hunks });
+      checks: state.verification.checks.map(c => ({ id: c.id, criteria: c.criteria || [], status: c.status, exitCode: c.exitCode, tests: c.tests ?? null, ...(c.rust ? { rust: c.rust } : {}), outputTail: c.outputTail?.slice(-2000) })), hunks: hunks.inline === false ? { ...hunks, hunks: hunks.hunks.map(({ before, after, ...range }) => range) } : hunks });
 }
 export function validateReviewerResult(value, state, hunks) {
   C.object(value, "reviewer report", ["criteria", "risks", "findings"]);

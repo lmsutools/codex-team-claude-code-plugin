@@ -1,5 +1,5 @@
 /** Move contributor-controlled prose into one explicitly labeled public section. */
-const fields = new Set(["readableTail", "bootstrapReads", "findings", "nativeReview", "result", "report", "reportSummary", "progress", "lastCommand", "error", "errorLogTail", "cancellationError", "reviewer", "reviewerError", "risks", "blockers", "evidence", "before", "after", "handbookNotesPreview", "draftObjective", "draftScopePreview", "draftVerificationPreview", "outputTail", "cliFailure", "lastDiagnostic", "excerpt"]);
+const fields = new Set(["readableTail", "bootstrapReads", "findings", "nativeReview", "result", "report", "reportSummary", "progress", "lastCommand", "error", "errorLogTail", "cancellationError", "reviewer", "reviewerError", "risks", "blockers", "evidence", "before", "after", "handbookNotesPreview", "draftObjective", "draftScopePreview", "draftVerificationPreview", "outputTail", "cliFailure", "lastDiagnostic", "excerpt", "rust"]);
 export function untrustedOutput(value) {
   const text = {};
   function walk(item, location = "", lead = false) {

@@ -10,6 +10,13 @@ import { inspectVerificationRequest,orderedChecks } from "./verification-request
 import {observeWithRetry} from "./background-facts.mjs";
 import {verificationOutcome} from "./verification-outcome.mjs";
 import {toolchainPassEnv, toolchainHint, workerToolchainEnv, toolchainSummary} from "./toolchain-env.mjs";
+import { runsRust, rustDiagnostics, warmJobTarget, rustReadiness } from "./rust.mjs";
+function rustSummary(stdoutPath, stderrPath, cwd) {
+  try {
+    const text = [stderrPath, stdoutPath].map(file => PC.boundedRead(file, 8 * 1024 * 1024)).join("\n");
+    return rustDiagnostics(text, cwd);
+  } catch { return null; }
+}
 import {validateTier, assertTierSupported, configuredTier, configuredModel, catalogAdvice, omittedTier, effectiveTier} from "./service-tier.mjs";
 import { reviewOptions, findingDispositions, findingPacketBinding } from './review-findings.mjs';
 import { instructionSnapshot, assertReviewInstructions } from './review-instructions.mjs';
@@ -222,6 +229,7 @@ export function doctor(input = {}) {
     diagnostics,
     hint: D.versionHint(runtime.version, {check, failure:job?.runtimeFailure}),
     toolchain: toolchainSummary(),
+    ...(cwd && fs.existsSync(path.join(cwd, "Cargo.toml")) ? { rust: rustReadiness(cwd, spawnSync) } : {}),
     ...(job ? { job: summary(job) } : {}),
     recovery: D.recovery(cwd, input.jobId, diagnostics),
   };
@@ -692,6 +700,8 @@ function prepareStart(plan, cwd) {
         "Source or worktree changed after integration. Reconcile the edits before resuming this task.",
       );
   }
+  // Rust: new job worktrees start from a copy-on-write clone of target/.
+  let warm = null;
   if (input.batchId && !previous) {
     const batch = S.extension("batch", input.batchId);
     if (!batch || !batch.children.some((c) => S.key(c.cwd) === S.key(cwd)))
@@ -699,6 +709,7 @@ function prepareStart(plan, cwd) {
     executionCwd = cwd;
   } else if (PC.enabled(profile, "branchMode") && !previous && options.mode !== "scout") {
     executionCwd = prepareBranch(cwd, profile);
+    warm = warmJobTarget(cwd, executionCwd, git);
   } else if (options.isolation === "worktree" && !previous) {
     if (
       !originBaseline.available ||
@@ -718,6 +729,7 @@ function prepareStart(plan, cwd) {
       originBaseline.head,
     ]);
     executionCwd = S.workspace(executionCwd);
+    warm = warmJobTarget(cwd, executionCwd, git);
   }
   const attemptBaseline = !previous && executionCwd === cwd && !PC.enabled(profile, "branchMode")
     ? originBaseline : snapshot(executionCwd);
@@ -800,6 +812,7 @@ function prepareStart(plan, cwd) {
     attempt: previous ? (previous.attempt ?? previous.revision ?? 0) + 1 : 0,
     baseline,
     attemptBaseline,
+    ...(warm ? { warmTarget: warm } : {}),
     reviewInstructionBaseline: previous && baseline === previous.baseline ? previous.reviewInstructionBaseline : instructionSnapshot(executionCwd, { requireGit: baseline.available === true || attemptBaseline.available === true }),
     ...(options.assignment && !options.readOnly ? { baselineBytes: previous && baseline === previous.baseline ? inheritCapture(previous.baselineBytes, artifact(jobId, "baseline-bytes")) : captureBytes(executionCwd, baseline, options.assignment.scope, artifact(jobId, "baseline-bytes"), profile) } : {}),
     originBaseline,
@@ -2037,12 +2050,16 @@ async function worker(jobId, verification = false) {
             coverageError = e.message;
           }
         const sandboxLimited = !spec.host && result.code !== 0 && sandboxLimitation(tail(stdoutPath) + "\n" + tail(stderrPath), state.executionCwd);
-        const autoPassEnv = toolchainPassEnv(spec.command, spec.passEnv || []);
+        const autoPassEnv = toolchainPassEnv(spec.command, spec.passEnv || [], process.env, spec.args || []);
         const cargoHint = result.code !== 0 ? toolchainHint({ ...spec, autoPassEnv }, tail(stdoutPath) + "\n" + tail(stderrPath)) : null;
+        // Rust: compact rustc/clippy diagnostics and failing tests from both logs
+        // (cargo writes diagnostics to stderr, which outputTail does not carry).
+        const rust = runsRust(spec) ? rustSummary(stdoutPath, stderrPath, state.executionCwd) : null;
         checks.push({
           ...spec,
           ...(autoPassEnv.length ? { autoPassEnv } : {}),
           ...(cargoHint ? { toolchainHint: cargoHint } : {}),
+          ...(rust ? { rust } : {}),
           executedIn: spec.host ? "host" : "sandbox",
           ...(spec.host && inlineCommand([spec.command,...spec.args]) ? {advisory:"Inline code: host execution was acknowledged by the lead."} : {}),
           ...(sandboxLimited ? { sandboxLimited: true, hint: "Review the diff and re-run an explicit host check with hostAck." } : {}),

@@ -21,4 +21,4 @@ for (const [name, template] of Object.entries(templates))
     new URL("templates/" + name + ".json", root),
     JSON.stringify(template, null, 2) + "\n",
   );
-console.log("Exported profile schema and standard/strict templates.");
+console.log("Exported profile schema and templates: " + Object.keys(templates).join(", ") + ".");
