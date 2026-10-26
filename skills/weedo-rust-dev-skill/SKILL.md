@@ -65,6 +65,7 @@ plan the two together.
 | Using rented VMs / many-core machines | **Workflow D** → [remote-vm-builds.md](references/remote-vm-builds.md) |
 | Architecture or design review | **Workflow C** |
 | Adding an OS later | [platforms.md §4](references/platforms.md#4-expansion-playbook-my-clients-are-on-maclinux-now) |
+| Multi-agent parallel waves (`codex_batch`) / 9 Golden Laws | **Workflow F** → [golden-protocol.md](references/golden-protocol.md) |
 | CI, lints, supply chain, release | [tooling-and-ci.md](references/tooling-and-ci.md) |
 | Which language/ecosystem features to use | [modern-rust.md](references/modern-rust.md) |
 
@@ -157,6 +158,25 @@ Follow [brownfield-migration.md](references/brownfield-migration.md) in strict o
    `crates/platform` & `crates/telemetry` → Phase 3 carve out `crates/domain` with
    `pub use` re-export shims → Phase 4 extract heavy adapters in parallel behind
    `Arc<dyn Port>`), tightening `--write-baseline` after each phase until debt hits 0.
+
+## Workflow F: The Golden Protocol for multi-agent parallel waves (`codex_batch`)
+
+When dispatching parallel AI workers on a Rust workspace, follow
+[golden-protocol.md](references/golden-protocol.md) so workers never collide on root
+`Cargo.toml` / `Cargo.lock` or introduce silent async/security bugs:
+1. **Beat 1 — Spine & Contracts (Serial):** Define types in `crates/domain` and
+   `Arc<dyn Port>` traits in `crates/app`. Scaffold new sibling crates via
+   `node scripts/rust-add-crate.mjs <name>` and run `cargo check --workspace` once on
+   the main checkout to lock `Cargo.lock` and warm `target/`.
+2. **Beat 2 — Conflict-Free Adapter Fan-Out (Parallel `codex_batch` Worktrees):**
+   Each worker gets a 50ms CoW `warmTarget` seed and a strict scope
+   `["crates/<adapter>/**"]` (root `Cargo.toml`, `Cargo.lock`, `domain`, and `app` are
+   read-only).
+3. **Beat 3 — Composition Root & The 9 Golden Laws (Serial):** Wire concrete adapters in
+   `apps/<bin>/src/main.rs`, run `node scripts/check-rust-arch.mjs` (<50ms static check
+   enforcing all 9 Golden Laws including `no_blocking_in_async`,
+   `no_unbounded_channels`, and `no_unredacted_secrets`), and run `cargo nextest` +
+   targeted `cargo mutants -p <ws>-domain`.
 
 ---
 

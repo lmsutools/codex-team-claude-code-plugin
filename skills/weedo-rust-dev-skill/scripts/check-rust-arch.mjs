@@ -25,6 +25,12 @@ const FORBIDDEN_DOMAIN_DEPS = new Set([
   "tokio", "reqwest", "hyper", "axum", "actix-web", "sqlx", "diesel", "sea-orm", "tonic", "sentry", "sentry-tracing",
 ]);
 const CFG_OS_RE = /#\s*\[\s*cfg\s*\([^)]*\b(?:target_os|target_family|unix|windows)\b/;
+const CFG_TEST_RE = /^\s*#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]/;
+const ASYNC_FN_RE = /\basync\s+fn\b/;
+const BLOCKING_IN_ASYNC_RE = /\b(?:std::thread::sleep|std::fs::(?:read|write|remove|create|copy|rename|metadata|OpenOptions|File)|reqwest::blocking)\b/;
+const UNBOUNDED_CHAN_RE = /\bunbounded_channel\s*::|\bunbounded_channel\s*\(/;
+const DERIVE_DEBUG_RE = /#\s*\[\s*derive\s*\([^)]*\bDebug\b[^)]*\)\s*\]/;
+const SECRET_FIELD_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?(password|secret|api_key|access_token|refresh_token|private_key|client_secret)\s*:\s*(?:Option<\s*)?(?:String|&(?:'[a-z]+\s+)?str)\b/;
 const BASELINE_REL = ".codex-team/arch-baseline.json";
 
 function walkFiles(dir, predicate, out = []) {
@@ -139,23 +145,66 @@ export function checkRustArchitecture(cwd = process.cwd(), { ignoreBaseline = fa
       }
     }
 
-    // Law 3: OS conditional compilation stays in crates/platform
-    if (!isPlatform) {
-      const srcFiles = walkFiles(path.join(crate.dir, "src"), f => f.endsWith(".rs"));
-      for (const file of srcFiles) {
-        const text = fs.readFileSync(file, "utf8");
-        const lines = text.split(/\r?\n/);
-        for (let i = 0; i < lines.length; i++) {
-          if (CFG_OS_RE.test(lines[i])) {
-            violations.push({
-              rule: "arch::platform_cfg_isolation",
-              file: rel(file),
-              line: i + 1,
-              column: 1,
-              message: `OS conditional compilation (${lines[i].trim()}) outside crates/platform; move OS-specific code behind a port trait implemented in crates/platform`,
-            });
-            break;
-          }
+    // Law 3 & Laws 7-9: Source-level architectural & semantic guardrails (production code only, before #[cfg(test)])
+    const srcFiles = walkFiles(path.join(crate.dir, "src"), f => f.endsWith(".rs"));
+    for (const file of srcFiles) {
+      const text = fs.readFileSync(file, "utf8");
+      const rawLines = text.split(/\r?\n/);
+      const prodLines = [];
+      for (const l of rawLines) {
+        if (CFG_TEST_RE.test(l)) break;
+        prodLines.push(l);
+      }
+      const hasAsyncFn = prodLines.some(l => !l.trim().startsWith("//") && ASYNC_FN_RE.test(l));
+      let cfgReported = false, blockingReported = false, unboundedReported = false, secretReported = false;
+      let inDebugStruct = false;
+
+      for (let i = 0; i < prodLines.length; i++) {
+        const line = prodLines[i];
+        const trimmed = line.trim();
+        if (trimmed.startsWith("//")) continue;
+
+        if (!isPlatform && !cfgReported && CFG_OS_RE.test(line)) {
+          cfgReported = true;
+          violations.push({
+            rule: "arch::platform_cfg_isolation",
+            file: rel(file),
+            line: i + 1,
+            column: 1,
+            message: `OS conditional compilation (${trimmed}) outside crates/platform; move OS-specific code behind a port trait implemented in crates/platform`,
+          });
+        }
+        if (hasAsyncFn && !blockingReported && BLOCKING_IN_ASYNC_RE.test(line)) {
+          blockingReported = true;
+          violations.push({
+            rule: "arch::no_blocking_in_async",
+            file: rel(file),
+            line: i + 1,
+            column: 1,
+            message: `blocking call (${trimmed}) in async module starves executor threads; use tokio::time::sleep, tokio::fs, or spawn_blocking`,
+          });
+        }
+        if (!unboundedReported && UNBOUNDED_CHAN_RE.test(line)) {
+          unboundedReported = true;
+          violations.push({
+            rule: "arch::no_unbounded_channels",
+            file: rel(file),
+            line: i + 1,
+            column: 1,
+            message: `unbounded_channel (${trimmed}) risks OOM under backpressure; use a bounded channel with explicit capacity`,
+          });
+        }
+        if (DERIVE_DEBUG_RE.test(line)) inDebugStruct = true;
+        else if (inDebugStruct && /^\s*\}/.test(line)) inDebugStruct = false;
+        else if (inDebugStruct && !secretReported && SECRET_FIELD_RE.test(line)) {
+          secretReported = true;
+          violations.push({
+            rule: "arch::no_unredacted_secrets",
+            file: rel(file),
+            line: i + 1,
+            column: 1,
+            message: `sensitive field (${trimmed}) inside a #[derive(Debug)] struct risks leaking secrets in logs/Sentry; use a redacted wrapper type or custom Debug impl`,
+          });
         }
       }
     }

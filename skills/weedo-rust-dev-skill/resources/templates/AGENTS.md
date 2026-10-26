@@ -15,7 +15,13 @@ platform, CI, or release work.
 - One error type per library crate (`thiserror`). `anyhow` only in binaries/tests.
   No workspace-wide error enum.
 - Never hold a lock across `.await`.
+- Never call `std::thread::sleep`, `std::fs::*`, or `reqwest::blocking` inside async modules; never use `unbounded_channel` in production code; never put raw `password`/`secret`/`api_key`/`access_token` fields inside `#[derive(Debug)]` structs.
 - OS-specific code only in `crates/platform`. OS-only deps are target-scoped.
+
+## Multi-agent parallel waves (The 3-Beat Golden Protocol)
+- **Beat 1 (Spine & Contracts — Serial):** Define types in `crates/domain` and `Arc<dyn Port>` traits in `crates/app`. Add new sibling adapter crates with `node scripts/rust-add-crate.mjs <name>` and run `cargo check --workspace` once on the main checkout.
+- **Beat 2 (Adapter Fan-Out — Parallel Worktrees):** Lock each worker's scope strictly to `crates/<adapter>/**` (never edit root `Cargo.toml`, `Cargo.lock`, `domain`, or `app` concurrently).
+- **Beat 3 (Composition Root — Serial):** Wire concrete adapters in `apps/{{NAME}}/src/main.rs` and run `node scripts/check-rust-arch.mjs`.
 
 ## Build speed
 - New dependency? Check `cargo tree -d`, transitive count, proc-macros/build scripts,
@@ -28,6 +34,7 @@ platform, CI, or release work.
 
 ## Checks before finishing a change
 ```bash
+node scripts/check-rust-arch.mjs   # <50ms static check of all 9 Golden Laws
 cargo fmt --all
 cargo clippy --workspace --all-targets
 cargo nextest run --workspace      # or: cargo test --workspace

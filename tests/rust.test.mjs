@@ -467,3 +467,58 @@ test("warmTarget skips rust-analyzer, release, dist, and .cargo-lock while cloni
   assert.equal(affectedPackages(meta, [".sqlx/query-123.json"], "/ws").mode, "workspace");
   assert.equal(affectedPackages(meta, ["proto/service.proto"], "/ws").mode, "workspace");
 });
+
+test("Golden Protocol: addSiblingCrate scaffolds compliant sibling crate and checkRustArchitecture catches Laws 7-9 (blocking in async, unbounded channels, unredacted secrets)", async () => {
+  const { addSiblingCrate } = await import("../scripts/rust-add-crate.mjs");
+  const { checkRustArchitecture } = await import("../scripts/check-rust-arch.mjs");
+  const ws = tmp("golden-ws");
+  const scaffold = path.join(ROOT, "skills/weedo-rust-dev-skill/scripts/scaffold_workspace.sh");
+  const res = spawnSync("bash", [scaffold, "nexus", ws, "--ship", "macos", "--ready", "windows,linux"], { encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  const project = path.join(ws, "nexus");
+
+  // Beat 1: add sibling adapter crate `billing`
+  const added = addSiblingCrate("billing", { cwd: project });
+  assert.equal(added.pkgName, "nexus-billing");
+  assert.deepEqual(added.scope, ["crates/billing/**"]);
+  assert.ok(fs.existsSync(path.join(project, "crates/billing/Cargo.toml")));
+  assert.ok(fs.existsSync(path.join(project, "crates/billing/src/lib.rs")));
+  assert.ok(fs.existsSync(path.join(project, "crates/billing/tests/it/main.rs")));
+  assert.match(fs.readFileSync(path.join(project, "Cargo.toml"), "utf8"), /nexus-billing = \{ path = "crates\/billing" \}/);
+  assert.equal(checkRustArchitecture(project).ok, true);
+
+  // Inject Laws 7, 8, and 9 into crates/billing/src/lib.rs (before #[cfg(test)])
+  const billingSrc = path.join(project, "crates/billing/src/lib.rs");
+  fs.writeFileSync(
+    billingSrc,
+    [
+      "#[derive(Clone, Debug)]",
+      "pub struct StripeConfig {",
+      "    pub api_key: String,",
+      "}",
+      "",
+      "pub async fn charge() {",
+      "    let (_tx, _rx) = tokio::sync::mpsc::unbounded_channel::<u32>();",
+      "    std::thread::sleep(std::time::Duration::from_millis(10));",
+      "}",
+      "",
+      "#[cfg(test)]",
+      "mod tests {",
+      "    #[test]",
+      "    fn allowed_in_tests() {",
+      "        std::thread::sleep(std::time::Duration::from_millis(1));",
+      "    }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  const audit = checkRustArchitecture(project);
+  assert.equal(audit.ok, false);
+  const rules = audit.violations.map(v => v.rule).sort();
+  assert.deepEqual(rules, [
+    "arch::no_blocking_in_async",
+    "arch::no_unbounded_channels",
+    "arch::no_unredacted_secrets",
+  ]);
+});

@@ -93,7 +93,7 @@ cp "$TPL/nextest.toml" "$ROOT/.config/nextest.toml"
 cp "$TPL/bacon.toml" "$ROOT/bacon.toml"
 subst < "$TPL/AGENTS.md" > "$ROOT/AGENTS.md"
 cp "$SKILL_DIR/scripts/cargo-fast.sh" "$SKILL_DIR/scripts/cargo-fast.ps1" "$ROOT/scripts/"
-cp "$SKILL_DIR/scripts/zthreads_sweep.sh" "$SKILL_DIR/scripts/timings_parallelism.py" "$SKILL_DIR/scripts/check-rust-arch.mjs" "$ROOT/scripts/"
+cp "$SKILL_DIR/scripts/zthreads_sweep.sh" "$SKILL_DIR/scripts/timings_parallelism.py" "$SKILL_DIR/scripts/check-rust-arch.mjs" "$SKILL_DIR/scripts/rust-add-crate.mjs" "$ROOT/scripts/"
 
 cat > "$ROOT/.codex-team/profile.json" <<'EOF'
 {

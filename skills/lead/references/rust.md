@@ -130,3 +130,24 @@ workspace's Cargo packages (`affectedPackages`) and returns a ready-to-pass
 - `scope` restricted to the owning crate (`crates/<pkg>/**`);
 - `criteria` requiring a reproducing unit test first, then a clean fix without
   `.unwrap()`/`.expect()`, verified offline via `cargo test -p <pkg>`.
+
+## 7. The Golden Protocol for Parallel Waves (`codex_batch`) & The 9 Golden Laws
+
+Never let parallel `codex_batch` workers edit root `Cargo.toml`, `Cargo.lock`, `crates/domain`, or `crates/app` concurrently. Execute multi-task waves in **3 Beats**:
+
+1. **Beat 1 — Spine & Contracts (Serial, Lead):**
+   - Define domain types in `crates/domain` and `Arc<dyn Port>` traits in `crates/app`.
+   - Scaffold any new sibling adapter crates using:
+     ```bash
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/rust-add-crate.mjs" <crate-short-name> --cwd /path/to/workspace
+     ```
+   - Run `cargo check --workspace` once on the main checkout to lock `Cargo.lock` and warm `target/`.
+2. **Beat 2 — Conflict-Free Adapter Fan-Out (Parallel `codex_batch` Worktrees):**
+   - Set each worker's `scope` strictly to `["crates/<adapter>/**"]` (root `Cargo.toml`, `Cargo.lock`, `domain`, and `app` remain read-only).
+   - Each worktree starts from a 50ms CoW `warmTarget` and runs `cargo test -p <ws>-<adapter> --locked --offline`.
+3. **Beat 3 — Composition Root & The 9 Golden Laws (Serial, Lead):**
+   - Merge the conflict-free branches, wire concrete adapters in `apps/<bin>/src/main.rs`, and run:
+     ```bash
+     node "${CLAUDE_PLUGIN_ROOT}/scripts/check-rust-arch.mjs" /path/to/workspace
+     ```
+   - This enforces all **9 Golden Laws** in `<50ms` (including `arch::no_blocking_in_async`, `arch::no_unbounded_channels`, and `arch::no_unredacted_secrets`).
