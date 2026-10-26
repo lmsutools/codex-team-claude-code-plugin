@@ -12,11 +12,12 @@ import { spawnSync } from "node:child_process";
 
 const RUST_TOOL = /^(?:cargo|rustc|rustup|rustdoc|rustfmt|clippy-driver|cargo-[a-z0-9_-]+)$/i;
 const toolName = command => String(command || "").replaceAll("\\", "/").split("/").at(-1).replace(/\.exe$/i, "");
-/** cargo-affected.mjs counts as a Rust tool: it runs cargo itself. */
+/** cargo-affected.mjs and check-rust-arch.mjs count as Rust tools for diagnostics. */
 export const AFFECTED_SCRIPT = "cargo-affected.mjs";
+export const ARCH_SCRIPT = "check-rust-arch.mjs";
 export const runsRust = check =>
   RUST_TOOL.test(toolName(check?.command)) ||
-  (check?.args || []).some(arg => toolName(arg) === AFFECTED_SCRIPT);
+  (check?.args || []).some(arg => [AFFECTED_SCRIPT, ARCH_SCRIPT].includes(toolName(arg)));
 
 // ---------------------------------------------------------------- test counts
 const NEXTEST_SUMMARY = /^\s*Summary \[[^\]]*\]\s+(\d+) tests? run:([^\n]*)$/m;

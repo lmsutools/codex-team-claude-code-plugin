@@ -80,8 +80,8 @@ DATE="$(date +%Y-%m-%d)"
 
 ROOT="$PARENT/$NAME"
 if [ -e "$ROOT" ] && [ "$FORCE" -ne 1 ]; then die "$ROOT already exists (use --force to overwrite files)"; fi
-mkdir -p "$ROOT"/{.cargo,.config,.github/workflows,.vscode,scripts,apps/"$NAME"/src}
-mkdir -p "$ROOT"/crates/{domain,app,platform,store-memory,test-support}/src "$ROOT"/crates/app/tests/it
+mkdir -p "$ROOT"/{.cargo,.config,.codex-team,.github/workflows,.vscode,scripts,apps/"$NAME"/src}
+mkdir -p "$ROOT"/crates/{domain,app,platform,store-memory,telemetry,test-support}/src "$ROOT"/crates/app/tests/it
 
 subst() { sed -e "s/{{NAME}}/$NAME/g" -e "s/{{NAME_ID}}/$NAME_ID/g" -e "s/{{RUST_VERSION}}/$RUST_VERSION/g" -e "s/{{DATE}}/$DATE/g" -e "s/{{KIND}}/$KIND/g"; }
 
@@ -93,7 +93,27 @@ cp "$TPL/nextest.toml" "$ROOT/.config/nextest.toml"
 cp "$TPL/bacon.toml" "$ROOT/bacon.toml"
 subst < "$TPL/AGENTS.md" > "$ROOT/AGENTS.md"
 cp "$SKILL_DIR/scripts/cargo-fast.sh" "$SKILL_DIR/scripts/cargo-fast.ps1" "$ROOT/scripts/"
-cp "$SKILL_DIR/scripts/zthreads_sweep.sh" "$SKILL_DIR/scripts/timings_parallelism.py" "$ROOT/scripts/"
+cp "$SKILL_DIR/scripts/zthreads_sweep.sh" "$SKILL_DIR/scripts/timings_parallelism.py" "$SKILL_DIR/scripts/check-rust-arch.mjs" "$ROOT/scripts/"
+
+cat > "$ROOT/.codex-team/profile.json" <<'EOF'
+{
+  "version": "1.0",
+  "extends": "rust",
+  "components": {
+    "gates": {
+      "level": "enforce",
+      "checks": {
+        "arch": {
+          "level": "enforce",
+          "when": { "changed": ["**/*.rs", "**/Cargo.toml"] },
+          "command": ["node", "${pluginRoot}/scripts/check-rust-arch.mjs"],
+          "timeoutSeconds": 60
+        }
+      }
+    }
+  }
+}
+EOF
 
 {
   echo '[toolchain]'
@@ -413,6 +433,13 @@ impl OrderRepo for MemoryOrderRepo {
 }
 EOF
 
+member_toml crates/telemetry "$NAME-telemetry" lib "tracing = { workspace = true }
+tracing-subscriber = { workspace = true }" "" "
+[lib]
+doctest = false
+"
+cp "$TPL/telemetry.rs" "$ROOT/crates/telemetry/src/lib.rs"
+
 member_toml crates/test-support "$NAME-test-support" lib "$NAME-app = { workspace = true }" "" "
 [lib]
 doctest = false
@@ -444,9 +471,9 @@ EOF
 member_toml "apps/$NAME" "$NAME" bin "$NAME-app = { workspace = true }
 $NAME-platform = { workspace = true }
 $NAME-store-memory = { workspace = true }
+$NAME-telemetry = { workspace = true }
 anyhow = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }" "" ""
+tracing = { workspace = true }" "" ""
 cat > "$ROOT/apps/$NAME/src/main.rs" <<EOF
 //! Composition root: read config, build adapters, inject, run. Keep it thin:
 //! this crate is re-linked on every change.
@@ -457,11 +484,13 @@ use ${NAME_ID}_app::domain::{CustomerId, Order, OrderId};
 use ${NAME_ID}_app::{OrderService, Platform};
 use ${NAME_ID}_platform::OsPlatform;
 use ${NAME_ID}_store_memory::MemoryOrderRepo;
+use ${NAME_ID}_telemetry::{TelemetryConfig, init as init_telemetry};
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    let _telemetry = init_telemetry(TelemetryConfig::from_env(
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    ));
 
     let platform = OsPlatform;
     let service = OrderService::new(Arc::new(MemoryOrderRepo::default()));

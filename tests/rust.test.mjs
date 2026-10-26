@@ -374,3 +374,42 @@ test("setupAllAgents links weedo-rust-dev-skill across Claude, Codex, and Antigr
   const second = setupAllAgents({ homeDir: fakeHome, pluginRoot: ROOT });
   for (const item of second.skills) assert.equal(item.status, "unchanged");
 });
+
+test("checkRustArchitecture passes scaffolded workspaces and catches feature-thrash, multi-test binaries, leaked cfg(target_os), impure domain, and coupled sibling adapters", async () => {
+  const { checkRustArchitecture } = await import("../scripts/check-rust-arch.mjs");
+  const ws = tmp("arch-ws");
+  const scaffold = path.join(ROOT, "skills/weedo-rust-dev-skill/scripts/scaffold_workspace.sh");
+  const res = spawnSync("bash", [scaffold, "acme", ws, "--ship", "macos", "--ready", "windows,linux"], { encoding: "utf8" });
+  assert.equal(res.status, 0, res.stderr);
+  const project = path.join(ws, "acme");
+  assert.deepEqual(checkRustArchitecture(project), { ok: true, violations: [] });
+
+  // Inject violations for each of the 5 architectural laws:
+  // 1. Per-crate feature override on workspace dependency
+  fs.appendFileSync(path.join(project, "crates/app/Cargo.toml"), '\nserde = { workspace = true, features = ["derive"] }\n');
+  // 2. Second integration test binary alongside tests/it/main.rs
+  fs.writeFileSync(path.join(project, "crates/app/tests/extra.rs"), "#[test] fn extra() {}\n");
+  // 3. Leaked #[cfg(target_os = "windows")] outside crates/platform
+  fs.appendFileSync(path.join(project, "crates/app/src/lib.rs"), '\n#[cfg(target_os = "windows")]\npub fn leaked() {}\n');
+  // 4a. Impure domain depending on tokio
+  fs.appendFileSync(path.join(project, "crates/domain/Cargo.toml"), '\n[dependencies]\ntokio = { workspace = true }\n');
+  // 4b. Coupled sibling adapters (store-memory depending on telemetry)
+  fs.appendFileSync(path.join(project, "crates/store-memory/Cargo.toml"), '\n[dependencies]\nacme-telemetry = { workspace = true }\n');
+
+  const broken = checkRustArchitecture(project);
+  assert.equal(broken.ok, false);
+  const rules = broken.violations.map(v => v.rule).sort();
+  assert.deepEqual(rules, [
+    "arch::no_workspace_feature_thrash",
+    "arch::platform_cfg_isolation",
+    "arch::pure_domain",
+    "arch::sibling_adapter_isolation",
+    "arch::single_integration_test_binary",
+  ]);
+  // Verify CLI output is parsed directly by rustDiagnostics
+  const cli = spawnSync(process.execPath, [path.join(ROOT, "scripts/check-rust-arch.mjs"), project], { encoding: "utf8" });
+  assert.equal(cli.status, 1);
+  const diag = rustDiagnostics(cli.stderr, project);
+  assert.equal(diag.errors, 5);
+  assert.equal(diag.diagnostics[0].code, "arch::no_workspace_feature_thrash");
+});

@@ -22,6 +22,7 @@ license = "UNLICENSED"
 {{NAME}}-app = { path = "crates/app" }
 {{NAME}}-platform = { path = "crates/platform" }
 {{NAME}}-store-memory = { path = "crates/store-memory" }
+{{NAME}}-telemetry = { path = "crates/telemetry" }
 {{NAME}}-test-support = { path = "crates/test-support" }
 
 # third-party (minimal starter set)
