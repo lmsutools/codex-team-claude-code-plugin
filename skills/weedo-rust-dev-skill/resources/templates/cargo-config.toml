@@ -1,0 +1,30 @@
+# Shared Cargo config. STABLE-ONLY: never put -Z flags here.
+# The nightly fast lane lives in scripts/cargo-fast.{sh,ps1} with its own target dir.
+
+[build]
+# jobs = 8   # set only when RAM-limited (rule of thumb: jobs ~= RAM_GB / 2)
+
+# ---------------- Windows (MSVC) ----------------
+# rust-lld ships with rustup and is usually much faster than link.exe.
+# If a native library misbehaves, comment these out to fall back to link.exe.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+[target.aarch64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+# ---------------- macOS ----------------
+# Apple's default linker (ld-prime, Xcode 15+) is already fast: nothing to configure.
+
+# ---------------- Linux ----------------
+# x86_64 uses rust-lld by default since Rust 1.90. For even faster links (remote VMs, CI):
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# [target.aarch64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[alias]
+c = "check --workspace --all-targets"
+lint = "clippy --workspace --all-targets"

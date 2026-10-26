@@ -5,5 +5,9 @@
   "license": "MIT",
   "type": "module",
   "engines": { "node": ">=24" },
-  "scripts": { "test": "node --import ./tests/setup-realpath-tmp.mjs --test --test-concurrency=1 tests/*.test.mjs" }
+  "scripts": {
+    "test": "node --import ./tests/setup-realpath-tmp.mjs --test --test-concurrency=1 tests/*.test.mjs",
+    "setup-all": "node scripts/setup-all.mjs",
+    "sentry-triage": "node scripts/sentry-triage.mjs"
+  }
 }

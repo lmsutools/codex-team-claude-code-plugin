@@ -29,11 +29,13 @@ Claude's context stays on design, review and judgment, and Codex does the typing
 - **Service tiers.** Ask for `fast`, `priority` or `ultrafast` per job. The plugin validates the tier against the selected CLI and shows the tier that actually ran, including when Codex drops one the model does not offer.
 - **Zero runtime dependencies.** Plain Node.js 24 with its built-in SQLite: about 12,000 lines of code and 400+ tests that run against a fake Codex, with no model usage.
 - **First-class Rust.**
+  - Bundles `weedo-rust-dev-skill` (`skills/weedo-rust-dev-skill/`) for planning, scaffolding, auditing build parallelism, sizing remote build VMs, fast TDD loops, and zero-bloat `crates/telemetry` Sentry crash reporting.
   - A `rust` profile template runs fmt, clippy and tests on only the packages a change affects (the owners of changed files plus their workspace dependents), offline and locked.
   - Cargo and nextest test counts are recognized.
-  - Decision packets carry compact rustc/clippy diagnostics and failing tests with `file:line`.
+  - Decision packets carry compact rustc/clippy diagnostics, failing tests with `file:line`, and `rustfmt` diffs.
   - Worktree jobs start from a copy-on-write warm `target/`, measured at about 2× faster builds.
   - `codex_doctor` reports offline-dependency readiness.
+  - `node scripts/sentry-triage.mjs` maps Sentry / BugSink / GlitchTip crash stacktraces directly to the owning Cargo crate and outputs a scoped `codex_start` worktree assignment.
 
 ## How a job flows
 
@@ -214,6 +216,16 @@ claude plugin update codex-team@lmsutools
 Inside a Claude Code session, `/plugin marketplace add https://github.com/lmsutools/codex-team-claude-code-plugin.git` and `/plugin install codex-team@lmsutools` do the same. The short form `lmsutools/codex-team-claude-code-plugin` also works if your Git can reach GitHub over SSH. Restart or reconnect sessions after installing or updating.
 
 Then open Claude Code in a Git project and run `/codex-team:lead <what you want built>`. Claude can also pick up the skill on its own.
+
+### Multi-Agent Bridge (Claude Code + Codex CLI + Antigravity on any PC)
+
+To install the bundled `weedo-rust-dev-skill` across **Claude Code** (`~/.claude/skills/`), **Codex CLI** (`~/.codex/skills/`), and **Antigravity** (`~/.gemini/config/skills/` + the toggleable `codex-rust-suite` Antigravity plugin with MCP server) on macOS, Windows (uses directory junctions, no Admin required), or Linux:
+
+```shell
+git clone https://github.com/lmsutools/codex-team-claude-code-plugin.git
+cd codex-team-claude-code-plugin
+npm run setup-all
+```
 
 ## Configuration
 

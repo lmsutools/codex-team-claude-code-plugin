@@ -34,8 +34,10 @@ Rust workspaces get dedicated profile, verification, review and isolation suppor
   - never `cargo clean`.
 - **`codex_doctor` Rust section.** It reports the cargo version, offline-dependency readiness (`cargo fetch --locked --offline`), nextest and the warm-target mode, with advice.
 - **Contracts.** `schemas/profile.schema.json` was regenerated. It had been missing top-level `passEnv`, the check fields `host`/`passEnv`/`allowInline`/`criteria`, and `gates.executionSensitivePaths`. A new sync test keeps templates, schema and examples in step with the runtime.
-- **Lead skill.** A short "Rust projects" section links to `skills/lead/references/rust.md`.
-- **Tests & macOS compatibility.** `tests/rust.test.mjs` adds 21 tests (unit, end-to-end against fake Codex, and real cargo), smoke-tested end-to-end against `codex-cli 0.162.1` (`gpt-6-astra`) on a Cargo workspace. Added `tests/setup-realpath-tmp.mjs` and fixed `/private/var` path canonicalization in `sandboxLimitation` so all 485 tests pass on macOS as well as Windows/Linux.
+- **Lead skill & bundled Rust architect skill.** A short "Rust projects" section links to `skills/lead/references/rust.md`, and `skills/weedo-rust-dev-skill/` bundles the full cross-platform Rust architecture, build optimization, remote VM sizing, fast TDD, and `crates/telemetry` Sentry playbook.
+- **Sentry / BugSink / GlitchTip triage (`scripts/sentry-triage.mjs`).** Maps Rust stacktraces and `tracing` breadcrumbs from a Sentry event/issue JSON to the owning Cargo workspace package and generates a scoped `codex_start` worktree assignment requiring a reproducing regression test.
+- **Cross-PC multi-agent installer (`scripts/setup-all.mjs`).** `npm run setup-all` links `weedo-rust-dev-skill` into Claude Code (`~/.claude/skills/`), Codex CLI (`~/.codex/skills/`), and Antigravity (`~/.gemini/config/skills/`), and installs the toggleable `codex-rust-suite` Antigravity plugin (`~/.gemini/config/plugins/codex-rust-suite/`) on macOS, Windows (junctions, no Admin needed), and Linux.
+- **Tests & macOS compatibility.** `tests/rust.test.mjs` adds 23 tests (unit, end-to-end against fake Codex, real cargo, Sentry triage, and multi-agent installer), smoke-tested end-to-end against `codex-cli 0.162.1` (`gpt-6-astra`) on a Cargo workspace. Added `tests/setup-realpath-tmp.mjs` and fixed `/private/var` path canonicalization in `sandboxLimitation` so all 487 tests pass on macOS as well as Windows/Linux.
 
 ## 1.2.2 (2026-10-18)
 

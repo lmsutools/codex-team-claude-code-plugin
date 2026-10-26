@@ -1,0 +1,35 @@
+# bacon.toml: TDD watcher config for bacon 3.x (https://dystroy.org/bacon)
+# Usage:
+#   bacon                         -> default job (check tests: sub-second red phase)
+#   bacon nextest -- -p my-crate  -> run one crate's tests on every save
+# Keys while running: c = check-tests, t = nextest, w = workspace tests, Esc = back
+
+default_job = "check-tests"
+
+[jobs.check-tests]
+command = ["cargo", "check", "--tests", "--color", "always"]
+need_stdout = false
+
+[jobs.nextest]
+command = ["cargo", "nextest", "run", "--color", "always", "--hide-progress-bar", "--failure-output", "final"]
+need_stdout = true
+allow_warnings = true
+
+[jobs.test]
+command = ["cargo", "test", "--color", "always"]
+need_stdout = true
+
+[jobs.workspace-tests]
+command = ["cargo", "nextest", "run", "--workspace", "--color", "always", "--hide-progress-bar", "--failure-output", "final"]
+need_stdout = true
+allow_warnings = true
+
+[jobs.clippy]
+command = ["cargo", "clippy", "--all-targets", "--color", "always"]
+need_stdout = false
+
+[keybindings]
+c = "job:check-tests"
+t = "job:nextest"
+w = "job:workspace-tests"
+l = "job:clippy"

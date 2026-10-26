@@ -108,3 +108,20 @@ If only docs or CI files changed, the check is skipped and exits 0. Add
   workspace-wide test runs.
 - **CARGO_TARGET_DIR.** A host `CARGO_TARGET_DIR` makes jobs share one
   directory, so they serialize on its lock and warm targets are skipped.
+
+## 6. Sentry / BugSink / GlitchTip crash triage
+
+When a production crash or error event arrives from Sentry (or self-hosted
+BugSink / GlitchTip):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/sentry-triage.mjs" --issue path/to/sentry-event.json --cwd /path/to/workspace
+```
+
+`sentry-triage.mjs` resolves the stacktrace's in-app `.rs` frames against the
+workspace's Cargo packages (`affectedPackages`) and returns a ready-to-pass
+`codex_start` worktree payload:
+- `isolation: "worktree"` (starts from a copy-on-write warm `target/`);
+- `scope` restricted to the owning crate (`crates/<pkg>/**`);
+- `criteria` requiring a reproducing unit test first, then a clean fix without
+  `.unwrap()`/`.expect()`, verified offline via `cargo test -p <pkg>`.

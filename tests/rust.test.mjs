@@ -305,3 +305,72 @@ test("cargo-affected runs cargo on affected packages only (real cargo)", { skip:
   assert.match(none.stderr, /skipped/);
   assert.ok(rustReadiness(ws, spawnSync).cargo.startsWith("cargo "));
 });
+
+// ── Sentry / BugSink / GlitchTip crash triage & multi-agent setup-all bridge ──
+test("buildSentryTriage maps stacktrace frames to workspace packages and produces a worktree assignment", async () => {
+  const { buildSentryTriage } = await import("../scripts/sentry-triage.mjs");
+  const ws = "/repo";
+  const metadata = {
+    workspace_root: ws,
+    workspace_members: ["types 0.1.0", "billing 0.1.0", "api 0.1.0"],
+    packages: [
+      { id: "types 0.1.0", name: "core-types", manifest_path: "/repo/crates/types/Cargo.toml", dependencies: [] },
+      { id: "billing 0.1.0", name: "billing", manifest_path: "/repo/crates/billing/Cargo.toml", dependencies: [{ name: "core-types", path: "/repo/crates/types" }] },
+      { id: "api 0.1.0", name: "api-server", manifest_path: "/repo/bins/api/Cargo.toml", dependencies: [{ name: "billing", path: "/repo/crates/billing" }] },
+    ],
+  };
+  const sentryIssue = {
+    shortId: "SUITE-42",
+    title: "panicked at 'attempt to subtract with overflow'",
+    latestEvent: {
+      tags: [["os", "windows"], ["arch", "x86_64"], ["release", "0.4.1"]],
+      breadcrumbs: {
+        values: [
+          { level: "info", category: "billing::invoice", message: "applying discount=150 to subtotal=100" },
+        ],
+      },
+      exception: {
+        values: [
+          {
+            type: "panic",
+            value: "attempt to subtract with overflow",
+            stacktrace: {
+              frames: [
+                { filename: "/rustc/abc/library/core/src/panicking.rs", lineno: 10 },
+                { abs_path: "/Users/dev/work/suite/crates/billing/src/invoice.rs", lineno: 88, function: "billing::invoice::apply_discount" },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  };
+  const triage = buildSentryTriage(sentryIssue, { cwd: ws, metadata });
+  assert.equal(triage.issueId, "SUITE-42");
+  assert.deepEqual(triage.affected, { mode: "packages", direct: ["billing"], transitive: ["api-server", "billing"] });
+  assert.equal(triage.frames[0].file, "crates/billing/src/invoice.rs");
+  assert.equal(triage.frames[0].line, 88);
+  assert.equal(triage.codexStart.isolation, "worktree");
+  assert.deepEqual(triage.codexStart.assignment.scope, ["crates/billing/**"]);
+  assert.match(triage.codexStart.assignment.criteria[0], /reproduces SUITE-42/);
+  assert.match(triage.codexStart.prompt, /applying discount=150/);
+});
+
+test("setupAllAgents links weedo-rust-dev-skill across Claude, Codex, and Antigravity and writes codex-rust-suite plugin", async () => {
+  const { setupAllAgents } = await import("../scripts/setup-all.mjs");
+  const fakeHome = tmp("fake-home");
+  const summary = setupAllAgents({ homeDir: fakeHome, pluginRoot: ROOT });
+  assert.equal(summary.skills.length, 3);
+  for (const item of summary.skills) {
+    assert.equal(item.status, "linked");
+    assert.ok(fs.existsSync(path.join(item.target, "SKILL.md")), `missing SKILL.md for ${item.agent}`);
+  }
+  const agyPluginJson = JSON.parse(fs.readFileSync(path.join(fakeHome, ".gemini/config/plugins/codex-rust-suite/plugin.json"), "utf8"));
+  assert.equal(agyPluginJson.name, "codex-rust-suite");
+  assert.ok(fs.existsSync(path.join(fakeHome, ".gemini/config/plugins/codex-rust-suite/assets/logo.svg")));
+  assert.ok(fs.existsSync(path.join(fakeHome, ".gemini/config/plugins/codex-rust-suite/skills/weedo-rust-dev-skill/SKILL.md")));
+  assert.ok(fs.existsSync(path.join(fakeHome, ".gemini/config/plugins/codex-rust-suite/skills/lead/SKILL.md")));
+  // Re-running is idempotent and reports "unchanged"
+  const second = setupAllAgents({ homeDir: fakeHome, pluginRoot: ROOT });
+  for (const item of second.skills) assert.equal(item.status, "unchanged");
+});
