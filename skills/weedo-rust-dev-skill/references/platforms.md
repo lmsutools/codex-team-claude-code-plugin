@@ -160,5 +160,66 @@ without waiting on CI:
      both `aarch64-pc-windows-msvc` and `x86_64-pc-windows-msvc` binaries built by
      `cargo xwin`.
 
+---
+
+## 9. Using Linux (Workstation or Rented VM) to Build for Windows & macOS
+
+A high-core Linux machine (or rented NVMe VM) is the fastest host for heavy Rust builds.
+Use this stack to target **Windows** and **macOS** directly from Linux:
+
+### 1. Instant Cross-OS Type & Lint Check on Linux (Zero SDK Needed)
+With the target triples in `rust-toolchain.toml`, Linux type-checks and lints both Windows
+(`#[cfg(windows)]`, `windows-sys`) and macOS (`#[cfg(target_os = "macos")]`, `objc2`) in
+1–2 seconds without any linker:
+```bash
+cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
+```
+
+### 2. Linux → Windows: Build `.exe` with `cargo-xwin` + Run Tests Under `wine64`
+Linux can both compile **and execute** Windows MSVC test binaries without booting a
+Windows VM:
+1. **Install `cargo-xwin` + `lld` + `wine64`:**
+   ```bash
+   sudo apt-get install -y clang lld wine64
+   cargo install cargo-xwin
+   ```
+2. **Build real Windows `.exe` binaries (`x86_64` or `aarch64`):**
+   ```bash
+   cargo xwin build --release --target x86_64-pc-windows-msvc
+   ```
+3. **Run Windows unit & integration tests directly on Linux via `wine64`:**
+   ```bash
+   CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER="wine64" \
+     cargo xwin nextest run --target x86_64-pc-windows-msvc
+   ```
+   Running under `wine64` catches real Windows bugs (backslash path handling, `os error 32`
+   exclusive file locks on open files, and Win32 API calls) in seconds on Linux.
+
+### 3. Linux → macOS: Cross-Compile with `cargo-zigbuild` & Sign with `rcodesign`
+- **Pure-Rust CLI / server / daemon crates:** Cross-compile `aarch64-apple-darwin` and
+  `x86_64-apple-darwin` directly on Linux with Zig:
+  ```bash
+  cargo install cargo-zigbuild
+  cargo zigbuild --release --target aarch64-apple-darwin
+  cargo zigbuild --release --target x86_64-apple-darwin
+  ```
+  *(If a dependency links macOS system frameworks like `Security` or `CoreFoundation`,
+  point `SDKROOT=/path/to/MacOSX.sdk` at an extracted Xcode macOS SDK tarball.)*
+- **Sign & Notarize macOS binaries from Linux (`apple-codesign`):**
+  Use pure-Rust `rcodesign` (`cargo install apple-codesign`) to sign Mach-O binaries/DMGs
+  and submit them to Apple's Notary API directly from Linux without Xcode.
+- **When to hand off to real Apple hardware (your Mac or `macos-latest` CI):**
+  Native macOS runtime tests (`crates/platform` launchd/Keychain/AppKit/WebKit tests) and
+  heavy Swift/Objective-C bridge builds must run on macOS hardware.
+
+### 4. Linux Filesystem Tip for Instant Worktree `target/` Clones (`XFS` or `Btrfs`)
+`codex-team`'s `warmTarget` uses `FICLONE` copy-on-write reflinks to clone `target/` into
+each parallel worktree in milliseconds.
+- Default `ext4` **does not** support reflinks (`FICLONE` returns `EOPNOTSUPP`).
+- On a Linux workstation or rented VM, place your workspace on **XFS** (`mkfs.xfs -m reflink=1`,
+  default on modern XFS) or **Btrfs** so parallel `codex_batch` worktrees get instant,
+  zero-disk-cost `target/` clones just like APFS on macOS.
+
 Keep the GUI framework in the bin crate (or one `ui` crate) only, so UI dependency
 churn doesn't rebuild the rest of the workspace.

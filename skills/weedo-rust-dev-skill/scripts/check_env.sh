@@ -64,9 +64,13 @@ if [ "$OS" = Darwin ]; then
   if [ -d target ] && [ ! -e target/.metadata_never_index ]; then warn "target/ is Spotlight-indexed: touch target/.metadata_never_index"; fi
   case "$PWD" in *"Mobile Documents"*|*iCloud*|*Dropbox*|*OneDrive*) warn "project is inside a synced folder: move it out";; esac
 else
-  case "$(df -PT . 2>/dev/null | awk 'NR==2{print $2}')" in
-    nfs*|cifs|fuse*) warn "project on a network/FUSE filesystem: use local NVMe";;
+  FS_TYPE="$(df -PT . 2>/dev/null | awk 'NR==2{print $2}')"
+  case "$FS_TYPE" in
+    nfs*|cifs|fuse*) warn "project on a network/FUSE filesystem ($FS_TYPE): use local NVMe";;
+    xfs|btrfs) ok "filesystem ($FS_TYPE) supports FICLONE copy-on-write reflinks for instant worktree target/ clones";;
+    ext4) info "filesystem is ext4 (no FICLONE reflinks); use XFS or Btrfs on Linux build disks to enable instant zero-copy worktree target/ clones";;
   esac
+  command -v wine64 >/dev/null 2>&1 && ok "wine64 available (can run Windows x86_64-pc-windows-msvc tests on Linux)" || info "wine64 not installed (optional: run Windows test binaries on Linux via CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine64)"
 fi
 
 echo "== Project (if run from a workspace root)"
