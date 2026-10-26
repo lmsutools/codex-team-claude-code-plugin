@@ -197,3 +197,67 @@ while that costs 200 lines instead of 200k.
 - `cargo nextest` runs each test in its own process, in parallel across cores.
 - Since edition 2024, doctests are merged into one binary per crate. Still disable them
   (`[lib] doctest = false`) for internal crates that have no doc examples.
+
+---
+
+## 7. Modern Patterns for Ambitious Systems (Zed / Astral / Oxide / Rerun Scale)
+
+When building a complex, multi-feature software suite (engines, sync/distributed systems,
+local-first desktop apps, high-throughput media/data pipelines, or extensible platforms),
+apply these five battle-tested patterns:
+
+### 7.1 Sans-IO Core + Deterministic Simulation Testing (DST)
+Used by Oxide, Quinn (`quinn-proto`), Linkerd, and modern sync engines:
+- **Never mix protocol/workflow state machines with real sockets, timers, or filesystem I/O.**
+- Write complex coordination logic as a pure **Sans-IO state machine**:
+  ```rust
+  pub fn handle(&mut self, now: Instant, event: InEvent) -> SmallVec<[OutAction; 4]>
+  ```
+- **Why it wins:**
+  1. You can test 10,000 network partitions, out-of-order messages, retries, and crash
+     recoveries in **50 milliseconds** inside a single unit test with a seeded RNG (or
+     `turmoil` for async network simulation) — zero flaky `sleep()` calls.
+  2. The thin adapter in Layer 2 simply feeds socket/timer events into `handle()` and
+     executes the returned `OutAction`s.
+
+### 7.2 Data-Oriented Design (SoA, Interning, Scratch Arenas, Zero-Copy)
+Used by Astral (`uv`, `ruff`), Rerun, and Bevy to stay 10–100× faster than naive OOP Rust:
+- **Intern repeated strings (`lasso`, `ustr`) or inline short strings (`compact_str`, `smol_str`):**
+  Comparing two `Symbol(u32)` IDs is a 1-cycle integer check and `Copy`, avoiding millions
+  of heap allocations and clones across worker threads.
+- **Per-task / per-frame scratchpad arenas (`bumpalo`):**
+  For parsers, query planners, frame pipelines, or batch jobs, allocate intermediate data
+  into a `bumpalo::Bump` arena and reset it in $O(1)$ at the end of the phase.
+- **Zero-copy local caches & IPC (`rkyv`, `zerocopy`, `bytes::Bytes`, `memmap2`):**
+  When persisting local indexes, state snapshots, or passing large payloads between
+  processes, use `rkyv` + `memmap2` so cold startup reads directly from OS page cache in
+  microseconds without a deserialization pass.
+
+### 7.3 Typestate & Parse-Don't-Validate at Subsystem Boundaries
+Make illegal states unrepresentable so multi-agent workers cannot misuse internal APIs:
+- **Typestate:** Encode lifecycle transitions in zero-sized type parameters
+  (`Connection<Unauthenticated> -> Connection<Authenticated>`, `Job<Draft> -> Job<Verified>`)
+  so calling `.execute()` before `.verify()` is a **compile error**, not a runtime bug.
+- **Validated Newtypes:** Never pass raw `String` for paths, URLs, tenant IDs, or SQL
+  identifiers across crate boundaries. Parse once at the edge into `CanonicalPath`,
+  `TenantId`, or `NonEmptyVec<T>`.
+
+### 7.4 Safe Extensibility: Wasm Component Model (`wasmtime`) or Process RPC
+Never use raw `libloading` (`dlopen` with `extern "Rust"`) for plugins: Rust has no
+stable ABI across compiler versions, and a plugin panic or UB corrupts the host process.
+- **In-process untrusted/third-party plugins:** Use **`wasmtime` + WebAssembly Component
+  Model (WIT)** (the pattern used by Zed and Envoy). You get capability-based sandboxing,
+  deterministic memory/CPU fuel limits, and a strongly typed `.wit` contract.
+- **Heavy native plugins (GPU/media/hardware):** Run as **isolated child processes**
+  communicating over stdio/Unix domain sockets/named pipes via `postcard` or JSON-RPC,
+  with shared memory (`memmap2` / OS shared memory) for bulk frame/audio buffers.
+
+### 7.5 Automated Architecture Guardrails (Enforce the DAG in Tests)
+In a large multi-agent codebase, rules written only in prose eventually drift. Add a
+fast workspace-topology test (runs `cargo metadata --no-deps --offline` in <100ms) that
+asserts:
+1. `domain` has **zero** dependencies on `tokio`, `reqwest`, `sqlx`, `axum`, or `sentry`.
+2. Sibling adapter crates (`crates/*` except `domain`/`app`) **never** depend on each
+   other — only on `domain` and `app`.
+3. Only `crates/platform` contains `#[cfg(target_os = ...)]`.
+4. Maximum dependency depth inside workspace crates stays $\le 4$.
